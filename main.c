@@ -83,16 +83,7 @@ int send_framed(int fd, const char *buf, uint32_t len) {
 int main() { //select part of the multi-socket pooling thing is taken from a tutorial, i cleared it as much as i could
 	memset(usersocks, 0, MAX_CLIENTS);
 	int fd = open("yamp.db", O_RDWR);
-
-	struct stat st;
-	fstat(fd, &st);
 	sqlite3_open("yamp.db", &DB);
-	if (st.st_size == 0) {
-		sqlite3_exec(DB,
-		             "CREATE TABLE users(name VARCHAR(64) PRIMARY "
-		             "KEY,screen_name VARCHAR(255), passwdhash VARCHAR(255))",
-		             NULL, 0, NULL);
-	}
 
 	int master_socket, client_sockets[MAX_CLIENTS] = {0};
 	int max_sd, valread, sd;
