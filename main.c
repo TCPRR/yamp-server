@@ -34,6 +34,7 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 	}
 	char *type = cJSON_GetObjectItem(PayloadParsed, "type")->valuestring;
 	if (strcmp(type, "request") == 0) {
+		cJSON_AddStringToObject(responsebuild, "type", "response");
 		cJSON *reqid = cJSON_GetObjectItem(PayloadParsed, "reqid");
 		cJSON_AddItemToObject(responsebuild, "reqid", cJSON_Duplicate(reqid,cJSON_True));
 		char *endpoint =
@@ -47,19 +48,16 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			    (strcmp(passwd, "SofiMaster7373") == 0)) {
 
 				cJSON_AddStringToObject(responsebuild, "response", "success");
-				cJSON_AddStringToObject(responsebuild, "type", "response");
 				usersocks[sockid] = username;
 			} else {
 
 				cJSON_AddStringToObject(responsebuild, "response", "fail");
-				cJSON_AddStringToObject(responsebuild, "type", "response");
 			}
 		} else if (strcmp(endpoint, "buddylist") == 0) {
 			cJSON* buddy1=CreateUserObject("lanternoric","Polish asshole tgat will NOT update ur subdomain","Lanternoric","online");
 			cJSON *buddies = cJSON_CreateArray();
 			cJSON_AddItemToArray(buddies,buddy1);
 			cJSON_AddItemToObject(responsebuild, "response", buddies);
-			cJSON_AddStringToObject(responsebuild, "type", "response");
 		}
 
 	} else {
