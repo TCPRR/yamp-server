@@ -1,2 +1,2 @@
 YAMPServer:
-	gcc main.c -lcjson -lsqlite3
+	gcc main.c -lcjson -lsqlite3 -lcrypto -lssl

@@ -10,12 +10,13 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-
+#include <openssl/sha.h>
 #define PORT 5224
 #define MAX_CLIENTS 255
 char *usersocks[MAX_CLIENTS];
 sqlite3 *DB;
-cJSON *CreateUserObject(char *name, char *description, char* display_name, char *status) {
+cJSON *CreateUserObject(char *name, char *description, char *display_name,
+                        char *status) {
 	cJSON *returnObj = cJSON_CreateObject();
 	cJSON_AddStringToObject(returnObj, "name", name);
 	cJSON_AddStringToObject(returnObj, "display_name", display_name);
@@ -23,6 +24,20 @@ cJSON *CreateUserObject(char *name, char *description, char* display_name, char 
 	cJSON_AddStringToObject(returnObj, "status", status);
 	return returnObj;
 }
+
+
+void sha256_hex(const char *input, char *output_hex) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char *)input, strlen(input), hash);
+
+    // Convert to hex string
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        sprintf(output_hex + (i * 2), "%02x", hash[i]);
+    }
+    output_hex[SHA256_DIGEST_LENGTH * 2] = '\0';
+}
+
+
 int ProcessRequest(char *payload, char **response, int sockid) {
 	cJSON *responsebuild = cJSON_CreateObject();
 	printf(payload);
@@ -36,7 +51,8 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 	if (strcmp(type, "request") == 0) {
 		cJSON_AddStringToObject(responsebuild, "type", "response");
 		cJSON *reqid = cJSON_GetObjectItem(PayloadParsed, "reqid");
-		cJSON_AddItemToObject(responsebuild, "reqid", cJSON_Duplicate(reqid,cJSON_True));
+		cJSON_AddItemToObject(responsebuild, "reqid",
+		                      cJSON_Duplicate(reqid, cJSON_True));
 		char *endpoint =
 		    cJSON_GetObjectItem(PayloadParsed, "endpoint")->valuestring;
 		if (strcmp(endpoint, "login") == 0) {
@@ -44,19 +60,32 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			    cJSON_GetObjectItem(PayloadParsed, "username")->valuestring;
 			char *passwd =
 			    cJSON_GetObjectItem(PayloadParsed, "password")->valuestring;
-			if ((strcmp(username, "sofi") == 0) &&
-			    (strcmp(passwd, "SofiMaster7373") == 0)) {
+			char *hashedPassword = malloc(32);
+				sha256_hex(passwd,hashedPassword);
+			const char *sql = "SELECT name, display_name FROM users WHERE name "
+			                  "= ? AND password = ?";
+			sqlite3_stmt *stmt;
+			sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+			sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
+
+			if (sqlite3_step(stmt) == SQLITE_ROW) {
 
 				cJSON_AddStringToObject(responsebuild, "response", "success");
-				usersocks[sockid] = username;
+				usersocks[sockid] = strdup(username);
 			} else {
 
 				cJSON_AddStringToObject(responsebuild, "response", "fail");
 			}
+
+			sqlite3_finalize(stmt);
 		} else if (strcmp(endpoint, "buddylist") == 0) {
-			cJSON* buddy1=CreateUserObject("lanternoric","Polish asshole tgat will NOT update ur subdomain","Lanternoric","online");
+			cJSON *buddy1 = CreateUserObject(
+			    "lanternoric",
+			    "Polish asshole tgat will NOT update ur subdomain",
+			    "Lanternoric", "online");
 			cJSON *buddies = cJSON_CreateArray();
-			cJSON_AddItemToArray(buddies,buddy1);
+			cJSON_AddItemToArray(buddies, buddy1);
 			cJSON_AddItemToObject(responsebuild, "response", buddies);
 		}
 
@@ -78,7 +107,8 @@ int send_framed(int fd, const char *buf, uint32_t len) {
 	return 0;
 }
 
-int main() { //select part of the multi-socket pooling thing is taken from a tutorial, i cleared it as much as i could
+int main() { // select part of the multi-socket pooling thing is taken from a
+	         // tutorial, i cleared it as much as i could
 	memset(usersocks, 0, sizeof(usersocks));
 	sqlite3_open("yamp.db", &DB);
 
@@ -89,7 +119,8 @@ int main() { //select part of the multi-socket pooling thing is taken from a tut
 	                              .sin_port = htons(PORT)};
 	fd_set readfds;
 
-	// create and configure master socket, the oen that will uh receive the incomings
+	// create and configure master socket, the oen that will uh receive the
+	// incomings
 	master_socket = socket(AF_INET, SOCK_STREAM, 0);
 	int opt = 1;
 	setsockopt(master_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
