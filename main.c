@@ -14,6 +14,7 @@
 #define PORT 5224
 #define MAX_CLIENTS 255
 char *usersocks[MAX_CLIENTS];
+char *statuses[MAX_CLIENTS]; //Upcoming status impl, will be a ghashtable soon
 sqlite3 *DB;
 cJSON *CreateUserObject(char *name, char *description, char *display_name,
                         char *status) {
