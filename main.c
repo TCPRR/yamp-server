@@ -25,18 +25,86 @@ cJSON *CreateUserObject(char *name, char *description, char *display_name,
 	return returnObj;
 }
 
-
 void sha256_hex(const char *input, char *output_hex) {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256((unsigned char *)input, strlen(input), hash);
+	unsigned char hash[SHA256_DIGEST_LENGTH];
+	SHA256((unsigned char *)input, strlen(input), hash);
 
-    // Convert to hex string
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        sprintf(output_hex + (i * 2), "%02x", hash[i]);
-    }
-    output_hex[SHA256_DIGEST_LENGTH * 2] = '\0';
+	// Convert to hex string
+	for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+		sprintf(output_hex + (i * 2), "%02x", hash[i]);
+	}
+	output_hex[SHA256_DIGEST_LENGTH * 2] = '\0';
+}
+int CreateUserObjectFromUsername(char *name, cJSON **output) {
+	const char *sql = "SELECT display_name FROM users WHERE name "
+	                  "= ?";
+	sqlite3_stmt *stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		*output = cJSON_CreateObject();
+		cJSON_AddStringToObject(*output, "name", name);
+		cJSON_AddStringToObject(*output, "display_name",
+		                        sqlite3_column_text(stmt, 0));
+		return 1;
+	} else {
+		return 0;
+	}
+
+	return 1;
 }
 
+int CreateFriendsListFromUsername(const char *name, cJSON **output) {
+
+	const char *sql = "SELECT friends FROM users WHERE name = ?";
+	sqlite3_stmt *stmt;
+
+	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		return 0;
+	}
+
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+
+	int rc = sqlite3_step(stmt);
+	if (rc != SQLITE_ROW) {
+		sqlite3_finalize(stmt);
+		return 0;
+	}
+
+	const unsigned char *friends_text = sqlite3_column_text(stmt, 0);
+
+	if (!friends_text) {
+		sqlite3_finalize(stmt);
+		return 0;
+	}
+
+	// copy cause strtok modifies string
+	char *friends_copy = strdup((const char *)friends_text);
+	if (!friends_copy) {
+		sqlite3_finalize(stmt);
+		return 0;
+	}
+
+	cJSON *array = cJSON_CreateArray();
+
+	char *token = strtok(friends_copy, ",");
+	while (token != NULL) {
+		cJSON *userObj = NULL;
+
+		if (CreateUserObjectFromUsername(token, &userObj)) {
+			cJSON_AddItemToArray(array, userObj);
+		}
+
+		token = strtok(NULL, ",");
+	}
+
+	free(friends_copy);
+	sqlite3_finalize(stmt);
+
+	*output = array;
+	return 1;
+}
 
 int ProcessRequest(char *payload, char **response, int sockid) {
 	cJSON *responsebuild = cJSON_CreateObject();
@@ -60,8 +128,8 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			    cJSON_GetObjectItem(PayloadParsed, "username")->valuestring;
 			char *passwd =
 			    cJSON_GetObjectItem(PayloadParsed, "password")->valuestring;
-			char *hashedPassword = malloc(32);
-				sha256_hex(passwd,hashedPassword);
+			char *hashedPassword = malloc(64);
+			sha256_hex(passwd, hashedPassword);
 			const char *sql = "SELECT name, display_name FROM users WHERE name "
 			                  "= ? AND password = ?";
 			sqlite3_stmt *stmt;
@@ -70,7 +138,6 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
 
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
-
 				cJSON_AddStringToObject(responsebuild, "response", "success");
 				usersocks[sockid] = strdup(username);
 			} else {
@@ -80,13 +147,12 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 
 			sqlite3_finalize(stmt);
 		} else if (strcmp(endpoint, "buddylist") == 0) {
-			cJSON *buddy1 = CreateUserObject(
-			    "lanternoric",
-			    "Polish asshole tgat will NOT update ur subdomain",
-			    "Lanternoric", "online");
-			cJSON *buddies = cJSON_CreateArray();
-			cJSON_AddItemToArray(buddies, buddy1);
-			cJSON_AddItemToObject(responsebuild, "response", buddies);
+			char *username = usersocks[sockid];
+			printf("%s is asking for its buddies\n", username);
+			cJSON *tmp;
+			if (CreateFriendsListFromUsername(username, &tmp)) {
+				cJSON_AddItemToObject(responsebuild, "response", tmp);
+			}
 		}
 
 	} else {
