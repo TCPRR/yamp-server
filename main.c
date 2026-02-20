@@ -13,9 +13,41 @@
 #include <openssl/sha.h>
 #define PORT 5224
 #define MAX_CLIENTS 255
+int client_sockets[MAX_CLIENTS] = {0};
 char *usersocks[MAX_CLIENTS];
-char *statuses[MAX_CLIENTS]; //Upcoming status impl, will be a ghashtable soon
+char *statuses[MAX_CLIENTS]; // Upcoming status impl, will be a ghashtable soon
 sqlite3 *DB;
+
+int send_framed(int fd, const char *buf, uint32_t len) {
+	uint32_t netlen = htonl(len);
+	if (send(fd, &netlen, sizeof(netlen), 0) != sizeof(netlen))
+		return -1;
+	send(fd, buf, len, 0);
+
+	return 0;
+}
+
+int UsersocksGetFD(const char *username) {
+	for (int i = 0; i < MAX_CLIENTS; i++) {
+		if (usersocks[i] && strcmp(usersocks[i], username) == 0)
+			return client_sockets[i];
+	}
+	return -1;
+}
+char *UsersocksFDtoUsername(int fd) {
+	for (int i = 0; i < MAX_CLIENTS; i++) {
+		if (client_sockets[i] == fd && usersocks[i])
+			return usersocks[i];
+	}
+	return NULL;
+}
+int UsersocksGetSlot(int fd) {
+	for (int i = 0; i < MAX_CLIENTS; i++) {
+		if (client_sockets[i] == fd)
+			return i;
+	}
+	return -1;
+}
 cJSON *CreateUserObject(char *name, char *description, char *display_name,
                         char *status) {
 	cJSON *returnObj = cJSON_CreateObject();
@@ -55,7 +87,27 @@ int CreateUserObjectFromUsername(char *name, cJSON **output) {
 
 	return 1;
 }
-
+int PushEvent(int fd, char *event, cJSON *data) {
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "type", "event");
+	cJSON_AddStringToObject(payload, "event", event);
+	cJSON_AddItemToObject(payload, "data", data);
+	send_framed(fd,cJSON_Print(payload),strlen(cJSON_Print(payload))+1);
+}
+int PushRecvIM(char *toWho, char *content) {
+	cJSON *payload = cJSON_CreateObject();
+	int fd;
+	for (int i = 0; i < MAX_CLIENTS; i++) {
+		if (strcmp(toWho, usersocks[i]) == 0) {
+			fd = client_sockets[i];
+			break;
+		}
+	}
+	printf("Pushing a message recv event to %s at %d, that says %s",toWho,fd,content);
+	cJSON_AddStringToObject(payload, "content", content);
+	cJSON_AddStringToObject(payload, "author", toWho);
+	PushEvent(fd, "recvim", payload);
+}
 int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 
 	const char *sql = "SELECT friends FROM users WHERE name = ?";
@@ -106,7 +158,6 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 	*output = array;
 	return 1;
 }
-
 int ProcessRequest(char *payload, char **response, int sockid) {
 	cJSON *responsebuild = cJSON_CreateObject();
 	printf(payload);
@@ -129,7 +180,7 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			    cJSON_GetObjectItem(PayloadParsed, "username")->valuestring;
 			char *passwd =
 			    cJSON_GetObjectItem(PayloadParsed, "password")->valuestring;
-			char *hashedPassword = malloc(64);
+			char *hashedPassword = malloc(65);
 			sha256_hex(passwd, hashedPassword);
 			const char *sql = "SELECT name, display_name FROM users WHERE name "
 			                  "= ? AND password = ?";
@@ -137,7 +188,7 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 			sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
 			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
-
+			printf("Hello there, %s!",username);
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
 				cJSON_AddStringToObject(responsebuild, "response", "success");
 				usersocks[sockid] = strdup(username);
@@ -154,6 +205,13 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			if (CreateFriendsListFromUsername(username, &tmp)) {
 				cJSON_AddItemToObject(responsebuild, "response", tmp);
 			}
+		} else if (strcmp(endpoint, "sendim") == 0) {
+			char *content =
+			    cJSON_GetObjectItem(PayloadParsed, "content")->valuestring;
+			char *toWho =
+			    cJSON_GetObjectItem(PayloadParsed, "toWho")->valuestring;
+				printf("Sending IM, said by %s, that says %s\n",usersocks[sockid],content); 
+			PushRecvIM(toWho, content);
 		}
 
 	} else {
@@ -165,21 +223,12 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 	printf("\n");
 	return 1;
 }
-int send_framed(int fd, const char *buf, uint32_t len) {
-	uint32_t netlen = htonl(len);
-	if (send(fd, &netlen, sizeof(netlen), 0) != sizeof(netlen))
-		return -1;
-	send(fd, buf, len, 0);
-
-	return 0;
-}
-
 int main() { // select part of the multi-socket pooling thing is taken from a
 	         // tutorial, i cleared it as much as i could
 	memset(usersocks, 0, sizeof(usersocks));
 	sqlite3_open("yamp.db", &DB);
 
-	int master_socket, client_sockets[MAX_CLIENTS] = {0};
+	int master_socket;
 	int max_sd, valread, sd;
 	struct sockaddr_in address = {.sin_family = AF_INET,
 	                              .sin_addr.s_addr = INADDR_ANY,
