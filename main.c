@@ -11,11 +11,19 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <openssl/sha.h>
+#include <glib.h>
 #define PORT 5224
 #define MAX_CLIENTS 255
 int client_sockets[MAX_CLIENTS] = {0};
-char *usersocks[MAX_CLIENTS];
-char *statuses[MAX_CLIENTS]; // Upcoming status impl, will be a ghashtable soon
+GHashTable *users_by_fd;
+GHashTable *users_by_name;
+
+typedef struct {
+    int fd;
+    char *username;
+    char *status;
+} user;
+
 sqlite3 *DB;
 
 int send_framed(int fd, const char *buf, uint32_t len) {
@@ -27,27 +35,6 @@ int send_framed(int fd, const char *buf, uint32_t len) {
 	return 0;
 }
 
-int UsersocksGetFD(const char *username) {
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (usersocks[i] && strcmp(usersocks[i], username) == 0)
-			return client_sockets[i];
-	}
-	return -1;
-}
-char *UsersocksFDtoUsername(int fd) {
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (client_sockets[i] == fd && usersocks[i])
-			return usersocks[i];
-	}
-	return NULL;
-}
-int UsersocksGetSlot(int fd) {
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (client_sockets[i] == fd)
-			return i;
-	}
-	return -1;
-}
 cJSON *CreateUserObject(char *name, char *description, char *display_name,
                         char *status) {
 	cJSON *returnObj = cJSON_CreateObject();
@@ -98,7 +85,7 @@ int PushRecvIM(char *toWho, char *content) {
 	cJSON *payload = cJSON_CreateObject();
 	int fd;
 	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (strcmp(toWho, usersocks[i]) == 0) {
+		if (strcmp(toWho, g_hash_table_lookup(users_by_name,toWho)) == 0) {
 			fd = client_sockets[i];
 			break;
 		}
@@ -158,7 +145,7 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 	*output = array;
 	return 1;
 }
-int ProcessRequest(char *payload, char **response, int sockid) {
+int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 	cJSON *responsebuild = cJSON_CreateObject();
 	printf(payload);
 	printf("\n");
@@ -191,7 +178,12 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			printf("Hello there, %s!",username);
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
 				cJSON_AddStringToObject(responsebuild, "response", "success");
-				usersocks[sockid] = strdup(username);
+				user newUser;
+				newUser.username = username;
+				newUser.fd = sockfd;
+				newUser.status = "online";
+				g_hash_table_insert(users_by_name,username,(gpointer)&newUser);
+				g_hash_table_insert(users_by_fd,GINT_TO_POINTER(sockfd),(gpointer)&newUser);
 			} else {
 
 				cJSON_AddStringToObject(responsebuild, "response", "fail");
@@ -199,7 +191,7 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 
 			sqlite3_finalize(stmt);
 		} else if (strcmp(endpoint, "buddylist") == 0) {
-			char *username = usersocks[sockid];
+			char *username = g_hash_table_lookup(users_by_fd, GINT_TO_POINTER(sockfd));
 			printf("%s is asking for its buddies\n", username);
 			cJSON *tmp;
 			if (CreateFriendsListFromUsername(username, &tmp)) {
@@ -210,7 +202,7 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 			    cJSON_GetObjectItem(PayloadParsed, "content")->valuestring;
 			char *toWho =
 			    cJSON_GetObjectItem(PayloadParsed, "toWho")->valuestring;
-				printf("Sending IM, said by %s, that says %s\n",usersocks[sockid],content); 
+				printf("Sending IM, said by %s, that says %s\n",g_hash_table_lookup(users_by_fd, GINT_TO_POINTER(sockfd)),content); 
 			PushRecvIM(toWho, content);
 		}
 
@@ -225,7 +217,8 @@ int ProcessRequest(char *payload, char **response, int sockid) {
 }
 int main() { // select part of the multi-socket pooling thing is taken from a
 	         // tutorial, i cleared it as much as i could
-	memset(usersocks, 0, sizeof(usersocks));
+	users_by_fd = g_hash_table_new(g_int_hash,g_int_equal);
+	users_by_name = g_hash_table_new(g_str_hash,g_str_equal);
 	sqlite3_open("yamp.db", &DB);
 
 	int master_socket;
@@ -284,14 +277,13 @@ int main() { // select part of the multi-socket pooling thing is taken from a
 
 				if (read(sd, &payloadlen, 4) != 4) {
 					close(sd);
-					usersocks[i] = 0;
 					client_sockets[i] = 0;
 				} else {
 					payloadlen = ntohl(payloadlen);
 					char *payload = malloc(payloadlen);
 					read(sd, payload, payloadlen);
 					char *response;
-					if (ProcessRequest(payload, &response, i)) {
+					if (ProcessRequest(payload, &response, i,sd)) {
 						send_framed(sd, response, strlen(response) + 1);
 					}
 				}
