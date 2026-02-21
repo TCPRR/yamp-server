@@ -81,15 +81,15 @@ int PushEvent(int fd, char *event, cJSON *data) {
 	cJSON_AddItemToObject(payload, "data", data);
 	send_framed(fd, cJSON_Print(payload), strlen(cJSON_Print(payload)) + 1);
 }
-int PushRecvIM(char *toWho, char* fromWho, char *content) {
+int PushRecvIM(char *toWho, char *fromWho, char *content) {
 	cJSON *payload = cJSON_CreateObject();
 	int fd = ((user *)g_hash_table_lookup(users_by_name, toWho))->fd;
-	if(fd){
-	printf("Pushing a message recv event to %s at %d, that says %s", toWho, fd,
-	       content);
-	cJSON_AddStringToObject(payload, "content", content);
-	cJSON_AddStringToObject(payload, "author", fromWho);
-	PushEvent(fd, "recvim", payload);
+	if (fd) {
+		printf("Pushing a message recv event to %s at %d, that says %s", toWho,
+		       fd, content);
+		cJSON_AddStringToObject(payload, "content", content);
+		cJSON_AddStringToObject(payload, "author", fromWho);
+		PushEvent(fd, "recvim", payload);
 	}
 }
 int CreateFriendsListFromUsername(const char *name, cJSON **output) {
@@ -170,8 +170,8 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 			sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
 			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
-			printf("Hello there, %s!", username);
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
+				printf("Hello there, %s!", username);
 				cJSON_AddStringToObject(responsebuild, "response", "success");
 				user *newUser = malloc(sizeof(user));
 				newUser->username = username;
@@ -192,8 +192,10 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			                     ->username;
 			printf("%s is asking for its buddies\n", username);
 			cJSON *tmp;
-			if (CreateFriendsListFromUsername(username, &tmp)) {
-				cJSON_AddItemToObject(responsebuild, "response", tmp);
+			if (username) {
+				if (CreateFriendsListFromUsername(username, &tmp)) {
+					cJSON_AddItemToObject(responsebuild, "response", tmp);
+				}
 			}
 		} else if (strcmp(endpoint, "sendim") == 0) {
 			char *content =
@@ -203,7 +205,7 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			                    ->username;
 			char *toWho =
 			    cJSON_GetObjectItem(PayloadParsed, "toWho")->valuestring;
-			printf("Sending IM, said by %s, to %s, that says %s\n", fromWho,
+			printf("Sending IM, said by %s, to %s, that says %s\n", fromWho, toWho,
 			       content);
 			PushRecvIM(toWho, fromWho, content);
 		}
