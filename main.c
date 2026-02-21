@@ -83,8 +83,9 @@ int PushEvent(int fd, char *event, cJSON *data) {
 }
 int PushRecvIM(char *toWho, char *fromWho, char *content) {
 	cJSON *payload = cJSON_CreateObject();
-	int fd = ((user *)g_hash_table_lookup(users_by_name, toWho))->fd;
-	if (fd) {
+	user* usr = ((user *)g_hash_table_lookup(users_by_name, toWho));
+	if (usr) {
+		int fd = usr->fd;
 		printf("Pushing a message recv event to %s at %d, that says %s", toWho,
 		       fd, content);
 		cJSON_AddStringToObject(payload, "content", content);
