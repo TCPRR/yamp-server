@@ -19,9 +19,9 @@ GHashTable *users_by_fd;
 GHashTable *users_by_name;
 
 typedef struct {
-    int fd;
-    char *username;
-    char *status;
+	int fd;
+	char *username;
+	char *status;
 } user;
 
 sqlite3 *DB;
@@ -79,21 +79,18 @@ int PushEvent(int fd, char *event, cJSON *data) {
 	cJSON_AddStringToObject(payload, "type", "event");
 	cJSON_AddStringToObject(payload, "event", event);
 	cJSON_AddItemToObject(payload, "data", data);
-	send_framed(fd,cJSON_Print(payload),strlen(cJSON_Print(payload))+1);
+	send_framed(fd, cJSON_Print(payload), strlen(cJSON_Print(payload)) + 1);
 }
-int PushRecvIM(char *toWho, char *content) {
+int PushRecvIM(char *toWho, char* fromWho, char *content) {
 	cJSON *payload = cJSON_CreateObject();
-	int fd;
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (strcmp(toWho, g_hash_table_lookup(users_by_name,toWho)) == 0) {
-			fd = client_sockets[i];
-			break;
-		}
-	}
-	printf("Pushing a message recv event to %s at %d, that says %s",toWho,fd,content);
+	int fd = ((user *)g_hash_table_lookup(users_by_name, toWho))->fd;
+	if(fd){
+	printf("Pushing a message recv event to %s at %d, that says %s", toWho, fd,
+	       content);
 	cJSON_AddStringToObject(payload, "content", content);
-	cJSON_AddStringToObject(payload, "author", toWho);
+	cJSON_AddStringToObject(payload, "author", fromWho);
 	PushEvent(fd, "recvim", payload);
+	}
 }
 int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 
@@ -147,8 +144,6 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 }
 int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 	cJSON *responsebuild = cJSON_CreateObject();
-	printf(payload);
-	printf("\n");
 	cJSON *PayloadParsed = cJSON_Parse(payload);
 	if (!PayloadParsed) {
 		printf("Failed parsing, did u fuck up smh\n");
@@ -163,8 +158,8 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 		char *endpoint =
 		    cJSON_GetObjectItem(PayloadParsed, "endpoint")->valuestring;
 		if (strcmp(endpoint, "login") == 0) {
-			char *username =
-			    cJSON_GetObjectItem(PayloadParsed, "username")->valuestring;
+			char *username = strdup(
+			    cJSON_GetObjectItem(PayloadParsed, "username")->valuestring);
 			char *passwd =
 			    cJSON_GetObjectItem(PayloadParsed, "password")->valuestring;
 			char *hashedPassword = malloc(65);
@@ -175,15 +170,16 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 			sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
 			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
-			printf("Hello there, %s!",username);
+			printf("Hello there, %s!", username);
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
 				cJSON_AddStringToObject(responsebuild, "response", "success");
-				user newUser;
-				newUser.username = username;
-				newUser.fd = sockfd;
-				newUser.status = "online";
-				g_hash_table_insert(users_by_name,username,(gpointer)&newUser);
-				g_hash_table_insert(users_by_fd,GINT_TO_POINTER(sockfd),(gpointer)&newUser);
+				user *newUser = malloc(sizeof(user));
+				newUser->username = username;
+				newUser->fd = sockfd;
+				newUser->status = "online";
+				g_hash_table_insert(users_by_name, username, (gpointer)newUser);
+				g_hash_table_insert(users_by_fd, GINT_TO_POINTER(sockfd),
+				                    (gpointer)newUser);
 			} else {
 
 				cJSON_AddStringToObject(responsebuild, "response", "fail");
@@ -191,7 +187,9 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 
 			sqlite3_finalize(stmt);
 		} else if (strcmp(endpoint, "buddylist") == 0) {
-			char *username = g_hash_table_lookup(users_by_fd, GINT_TO_POINTER(sockfd));
+			char *username = ((user *)(g_hash_table_lookup(
+			                      users_by_fd, GINT_TO_POINTER(sockfd))))
+			                     ->username;
 			printf("%s is asking for its buddies\n", username);
 			cJSON *tmp;
 			if (CreateFriendsListFromUsername(username, &tmp)) {
@@ -200,10 +198,14 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 		} else if (strcmp(endpoint, "sendim") == 0) {
 			char *content =
 			    cJSON_GetObjectItem(PayloadParsed, "content")->valuestring;
+			char *fromWho = ((user *)g_hash_table_lookup(
+			                     users_by_fd, GINT_TO_POINTER(sockfd)))
+			                    ->username;
 			char *toWho =
 			    cJSON_GetObjectItem(PayloadParsed, "toWho")->valuestring;
-				printf("Sending IM, said by %s, that says %s\n",g_hash_table_lookup(users_by_fd, GINT_TO_POINTER(sockfd)),content); 
-			PushRecvIM(toWho, content);
+			printf("Sending IM, said by %s, to %s, that says %s\n", fromWho,
+			       content);
+			PushRecvIM(toWho, fromWho, content);
 		}
 
 	} else {
@@ -217,8 +219,8 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 }
 int main() { // select part of the multi-socket pooling thing is taken from a
 	         // tutorial, i cleared it as much as i could
-	users_by_fd = g_hash_table_new(g_int_hash,g_int_equal);
-	users_by_name = g_hash_table_new(g_str_hash,g_str_equal);
+	users_by_fd = g_hash_table_new(g_direct_hash, g_direct_equal);
+	users_by_name = g_hash_table_new(g_str_hash, g_str_equal);
 	sqlite3_open("yamp.db", &DB);
 
 	int master_socket;
@@ -283,7 +285,7 @@ int main() { // select part of the multi-socket pooling thing is taken from a
 					char *payload = malloc(payloadlen);
 					read(sd, payload, payloadlen);
 					char *response;
-					if (ProcessRequest(payload, &response, i,sd)) {
+					if (ProcessRequest(payload, &response, i, sd)) {
 						send_framed(sd, response, strlen(response) + 1);
 					}
 				}
