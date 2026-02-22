@@ -208,6 +208,7 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			    cJSON_GetObjectItem(PayloadParsed, "toWho")->valuestring;
 			printf("Sending IM, said by %s, to %s, that says %s\n", fromWho, toWho,
 			       content);
+			PushRecvIM(fromWho, fromWho, content);
 			PushRecvIM(toWho, fromWho, content);
 		}
 
