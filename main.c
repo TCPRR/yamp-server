@@ -55,6 +55,7 @@ void sha256_hex(const char *input, char *output_hex) {
 	}
 	output_hex[SHA256_DIGEST_LENGTH * 2] = '\0';
 }
+
 int CreateUserObjectFromUsername(char *name, cJSON **output) {
 	const char *sql = "SELECT display_name FROM users WHERE name "
 	                  "= ?";
@@ -73,28 +74,6 @@ int CreateUserObjectFromUsername(char *name, cJSON **output) {
 	}
 
 	return 1;
-}
-int PushEvent(int fd, char *event, cJSON *data) {
-	cJSON *payload = cJSON_CreateObject();
-	cJSON_AddStringToObject(payload, "type", "event");
-	cJSON_AddStringToObject(payload, "event", event);
-	cJSON_AddItemToObject(payload, "data", data);
-	send_framed(fd, cJSON_Print(payload), strlen(cJSON_Print(payload)) + 1);
-}
-int PushRecvIM(char *toWho, char* where, char *fromWho, char *content) {
-	cJSON *payload = cJSON_CreateObject();
-	user* usr = ((user *)g_hash_table_lookup(users_by_name, toWho));
-	if (usr) {
-		int fd = usr->fd;
-		printf("Pushing a message recv event to %s at %d, that says %s\n", toWho,
-		       fd, content);
-		cJSON_AddStringToObject(payload, "content", content);
-		cJSON_AddStringToObject(payload, "author", fromWho);
-		cJSON_AddStringToObject(payload, "where", where);
-		PushEvent(fd, "recvim", payload);
-	} else {
-		printf("a message was canceled due to the other side being offline!\n");
-	}
 }
 int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 
@@ -146,25 +125,122 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 	*output = array;
 	return 1;
 }
-char* MakeDMChannel(const char *a, const char *b) {
-    if (strcmp(a, b) < 0)
-        return g_strdup_printf("%s|%s", a, b);
-    else
-        return g_strdup_printf("%s|%s", b, a);
+int CreateSpacesListFromUsername(const char *name, cJSON **output) {
+
+	const char *sql = "SELECT spaces FROM users WHERE name = ?";
+	sqlite3_stmt *stmt;
+
+	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		return 0;
+	}
+
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+
+	int rc = sqlite3_step(stmt);
+	if (rc != SQLITE_ROW) {
+		sqlite3_finalize(stmt);
+		return 0;
+	}
+
+	const unsigned char *friends_text = sqlite3_column_text(stmt, 0);
+
+	if (!friends_text) {
+		sqlite3_finalize(stmt);
+		return 0;
+	}
+
+	// copy cause strtok modifies string
+	char *friends_copy = strdup((const char *)friends_text);
+	if (!friends_copy) {
+		sqlite3_finalize(stmt);
+		return 0;
+	}
+
+	cJSON *array = cJSON_CreateArray();
+
+	char *token = strtok(friends_copy, ",");
+	while (token != NULL) {
+		cJSON *userObj = NULL;
+
+		if (CreateSpaceObjectFromName(token, &userObj)) {
+			cJSON_AddItemToArray(array, userObj);
+		}
+
+		token = strtok(NULL, ",");
+	}
+
+	free(friends_copy);
+	sqlite3_finalize(stmt);
+
+	*output = array;
+	return 1;
 }
-char* GetOtherFromChannel(const char *channel, const char *me) {
-    char *copy = strdup(channel);
-    char *dash = strchr(copy, '|');
-    if (!dash) { free(copy); return NULL; }
-    *dash = '\0';
-    char *a = copy;
-    char *b = dash + 1;
-    char *result = strcmp(a, me) == 0 ? strdup(b) : strdup(a);
-    free(copy);
-    return result;
+
+int CreateUsersOwnObjectFromUsername(char *name, cJSON **output) {
+	const char *sql = "SELECT display_name, spaces FROM users WHERE name "
+	                  "= ?";
+	sqlite3_stmt *stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		*output = cJSON_CreateObject();
+		cJSON_AddStringToObject(*output, "name", name);
+		cJSON_AddStringToObject(*output, "display_name",
+		                        sqlite3_column_text(stmt, 0));
+		cJSON_AddItemToObject(*output, "spaces",
+		                        CreateSpacesListFromUsername(name, spaces));
+		return 1;
+	} else {
+		return 0;
+	}
+
+	return 1;
+}
+int PushEvent(int fd, char *event, cJSON *data) {
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "type", "event");
+	cJSON_AddStringToObject(payload, "event", event);
+	cJSON_AddItemToObject(payload, "data", data);
+	send_framed(fd, cJSON_Print(payload), strlen(cJSON_Print(payload)) + 1);
+}
+int PushRecvIM(char *toWho, char *where, char *fromWho, char *content) {
+	cJSON *payload = cJSON_CreateObject();
+	user *usr = ((user *)g_hash_table_lookup(users_by_name, toWho));
+	if (usr) {
+		int fd = usr->fd;
+		printf("Pushing a message recv event to %s at %d, that says %s\n",
+		       toWho, fd, content);
+		cJSON_AddStringToObject(payload, "content", content);
+		cJSON_AddStringToObject(payload, "author", fromWho);
+		cJSON_AddStringToObject(payload, "where", where);
+		PushEvent(fd, "recvim", payload);
+	} else {
+		printf("a message was canceled due to the other side being offline!\n");
+	}
+}
+char *MakeDMChannel(const char *a, const char *b) {
+	if (strcmp(a, b) < 0)
+		return g_strdup_printf("%s|%s", a, b);
+	else
+		return g_strdup_printf("%s|%s", b, a);
+}
+char *GetOtherFromChannel(const char *channel, const char *me) {
+	char *copy = strdup(channel);
+	char *dash = strchr(copy, '|');
+	if (!dash) {
+		free(copy);
+		return NULL;
+	}
+	*dash = '\0';
+	char *a = copy;
+	char *b = dash + 1;
+	char *result = strcmp(a, me) == 0 ? strdup(b) : strdup(a);
+	free(copy);
+	return result;
 }
 int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
-	printf("%s\n",payload);
+	printf("%s\n", payload);
 	cJSON *responsebuild = cJSON_CreateObject();
 	cJSON *PayloadParsed = cJSON_Parse(payload);
 	if (!PayloadParsed) {
@@ -196,7 +272,7 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 				printf("Hello there, %s!", username);
 				cJSON_AddStringToObject(responsebuild, "response", "success");
 				cJSON *tmp;
-				CreateUserObjectFromUsername(username, &tmp);
+				CreateUsersOwnObjectFromUsername(username, &tmp);
 				cJSON_AddItemToObject(responsebuild, "user", tmp);
 				user *newUser = malloc(sizeof(user));
 				newUser->username = username;
@@ -231,10 +307,10 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			char *where =
 			    cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
 			char *otherBoi;
-			otherBoi=GetOtherFromChannel(where, fromWho);
+			otherBoi = GetOtherFromChannel(where, fromWho);
 			if (otherBoi) {
-				PushRecvIM(otherBoi,where,fromWho,content);
-				PushRecvIM(fromWho,where,fromWho,content);
+				PushRecvIM(otherBoi, where, fromWho, content);
+				PushRecvIM(fromWho, where, fromWho, content);
 			}
 		}
 
