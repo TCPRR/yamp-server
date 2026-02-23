@@ -148,9 +148,9 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 }
 char* MakeDMChannel(const char *a, const char *b) {
     if (strcmp(a, b) < 0)
-        return g_strdup_printf("%s-%s", a, b);
+        return g_strdup_printf("%s|%s", a, b);
     else
-        return g_strdup_printf("%s-%s", b, a);
+        return g_strdup_printf("%s|%s", b, a);
 }
 char* GetOtherFromChannel(const char *channel, const char *me) {
     char *copy = strdup(channel);
