@@ -154,7 +154,7 @@ char* MakeDMChannel(const char *a, const char *b) {
 }
 char* GetOtherFromChannel(const char *channel, const char *me) {
     char *copy = strdup(channel);
-    char *dash = strchr(copy, '-');
+    char *dash = strchr(copy, '|');
     if (!dash) { free(copy); return NULL; }
     *dash = '\0';
     char *a = copy;
