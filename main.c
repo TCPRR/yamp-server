@@ -81,16 +81,19 @@ int PushEvent(int fd, char *event, cJSON *data) {
 	cJSON_AddItemToObject(payload, "data", data);
 	send_framed(fd, cJSON_Print(payload), strlen(cJSON_Print(payload)) + 1);
 }
-int PushRecvIM(char *toWho, char *fromWho, char *content) {
+int PushRecvIM(char *toWho, char* where, char *fromWho, char *content) {
 	cJSON *payload = cJSON_CreateObject();
 	user* usr = ((user *)g_hash_table_lookup(users_by_name, toWho));
 	if (usr) {
 		int fd = usr->fd;
-		printf("Pushing a message recv event to %s at %d, that says %s", toWho,
+		printf("Pushing a message recv event to %s at %d, that says %s\n", toWho,
 		       fd, content);
 		cJSON_AddStringToObject(payload, "content", content);
 		cJSON_AddStringToObject(payload, "author", fromWho);
+		cJSON_AddStringToObject(payload, "where", where);
 		PushEvent(fd, "recvim", payload);
+	} else {
+		printf("a message was canceled due to the other side being offline!\n");
 	}
 }
 int CreateFriendsListFromUsername(const char *name, cJSON **output) {
@@ -143,7 +146,25 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 	*output = array;
 	return 1;
 }
+char* MakeDMChannel(const char *a, const char *b) {
+    if (strcmp(a, b) < 0)
+        return g_strdup_printf("%s-%s", a, b);
+    else
+        return g_strdup_printf("%s-%s", b, a);
+}
+char* GetOtherFromChannel(const char *channel, const char *me) {
+    char *copy = strdup(channel);
+    char *dash = strchr(copy, '-');
+    if (!dash) { free(copy); return NULL; }
+    *dash = '\0';
+    char *a = copy;
+    char *b = dash + 1;
+    char *result = strcmp(a, me) == 0 ? strdup(b) : strdup(a);
+    free(copy);
+    return result;
+}
 int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
+	printf("%s\n",payload);
 	cJSON *responsebuild = cJSON_CreateObject();
 	cJSON *PayloadParsed = cJSON_Parse(payload);
 	if (!PayloadParsed) {
@@ -204,12 +225,14 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			char *fromWho = ((user *)g_hash_table_lookup(
 			                     users_by_fd, GINT_TO_POINTER(sockfd)))
 			                    ->username;
-			char *toWho =
-			    cJSON_GetObjectItem(PayloadParsed, "toWho")->valuestring;
-			printf("Sending IM, said by %s, to %s, that says %s\n", fromWho, toWho,
-			       content);
-			PushRecvIM(fromWho, fromWho, content);
-			PushRecvIM(toWho, fromWho, content);
+			char *where =
+			    cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
+			char *otherBoi;
+			otherBoi=GetOtherFromChannel(where, fromWho);
+			if (otherBoi) {
+				PushRecvIM(otherBoi,where,fromWho,content);
+				PushRecvIM(fromWho,where,fromWho,content);
+			}
 		}
 
 	} else {
