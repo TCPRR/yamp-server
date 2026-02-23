@@ -195,6 +195,9 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
 				printf("Hello there, %s!", username);
 				cJSON_AddStringToObject(responsebuild, "response", "success");
+				cJSON *tmp;
+				CreateUserObjectFromUsername(username, &tmp);
+				cJSON_AddItemToObject(responsebuild, "user", tmp);
 				user *newUser = malloc(sizeof(user));
 				newUser->username = username;
 				newUser->fd = sockfd;
