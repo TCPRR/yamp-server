@@ -55,7 +55,25 @@ void sha256_hex(const char *input, char *output_hex) {
 	}
 	output_hex[SHA256_DIGEST_LENGTH * 2] = '\0';
 }
+int CreateSpaceObjectFromName(char *name, cJSON **output) {
+	const char *sql = "SELECT display_name FROM spaces WHERE name "
+	                  "= ?";
+	sqlite3_stmt *stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
 
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		*output = cJSON_CreateObject();
+		cJSON_AddStringToObject(*output, "name", name);
+		cJSON_AddStringToObject(*output, "display_name",
+		                        sqlite3_column_text(stmt, 0));
+		return 1;
+	} else {
+		return 0;
+	}
+
+	return 1;
+}
 int CreateUserObjectFromUsername(char *name, cJSON **output) {
 	const char *sql = "SELECT display_name FROM users WHERE name "
 	                  "= ?";
@@ -188,8 +206,10 @@ int CreateUsersOwnObjectFromUsername(char *name, cJSON **output) {
 		cJSON_AddStringToObject(*output, "name", name);
 		cJSON_AddStringToObject(*output, "display_name",
 		                        sqlite3_column_text(stmt, 0));
+		cJSON* spaces;
+		CreateSpacesListFromUsername(name, &spaces);
 		cJSON_AddItemToObject(*output, "spaces",
-		                        CreateSpacesListFromUsername(name, spaces));
+		                        spaces);
 		return 1;
 	} else {
 		return 0;
