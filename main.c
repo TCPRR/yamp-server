@@ -393,8 +393,8 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 				           content); // dm prob, if it fails wont do anything
 				                     // anyway, i am cpu cycle saving maxxing
 				                     // uhh via no if checks
+				PushRecvIM(fromWho, where, fromWho, content);
 			}
-			PushRecvIM(fromWho, where, fromWho, content);
 		} else if (strcmp(endpoint, "getchannels") == 0) {
 			char *space =
 			    cJSON_GetObjectItem(PayloadParsed, "space")->valuestring;
