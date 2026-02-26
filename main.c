@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <openssl/sha.h>
 #include <glib.h>
+#include "helpers.h"
 #define PORT 5224
 #define MAX_CLIENTS 255
 int client_sockets[MAX_CLIENTS] = {0};
@@ -145,7 +146,33 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 }
 int CreateSpacesListFromUsername(const char *name, cJSON **output) {
 
-	const char *sql = "SELECT spaces FROM users WHERE name = ?";
+	const char *sql =
+	    "SELECT \"space-name\" FROM \"user-space\" WHERE \"user-name\" = ?";
+	sqlite3_stmt *stmt;
+
+	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		return 0;
+	}
+
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
+
+	cJSON *array = cJSON_CreateArray();
+	for (int rc = sqlite3_step(stmt); rc == SQLITE_ROW;
+	     rc = sqlite3_step(stmt)) {
+		cJSON *userObj;
+		if (CreateSpaceObjectFromName(sqlite3_column_text(stmt, 0), &userObj)) {
+			cJSON_AddItemToArray(array, userObj);
+		}
+	}
+
+	sqlite3_finalize(stmt);
+
+	*output = array;
+	return 1;
+}
+int CreateChannelsListFromName(const char *name, cJSON **output) {
+
+	const char *sql = "SELECT channels FROM spaces WHERE name = ?";
 	sqlite3_stmt *stmt;
 
 	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -178,12 +205,9 @@ int CreateSpacesListFromUsername(const char *name, cJSON **output) {
 
 	char *token = strtok(friends_copy, ",");
 	while (token != NULL) {
-		cJSON *userObj = NULL;
-
-		if (CreateSpaceObjectFromName(token, &userObj)) {
-			cJSON_AddItemToArray(array, userObj);
-		}
-
+		cJSON *channel = cJSON_CreateObject();
+		cJSON_AddStringToObject(channel, "name", token);
+		cJSON_AddItemToArray(array, channel);
 		token = strtok(NULL, ",");
 	}
 
@@ -195,7 +219,7 @@ int CreateSpacesListFromUsername(const char *name, cJSON **output) {
 }
 
 int CreateUsersOwnObjectFromUsername(char *name, cJSON **output) {
-	const char *sql = "SELECT display_name, spaces FROM users WHERE name "
+	const char *sql = "SELECT display_name FROM users WHERE name "
 	                  "= ?";
 	sqlite3_stmt *stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
@@ -206,16 +230,42 @@ int CreateUsersOwnObjectFromUsername(char *name, cJSON **output) {
 		cJSON_AddStringToObject(*output, "name", name);
 		cJSON_AddStringToObject(*output, "display_name",
 		                        sqlite3_column_text(stmt, 0));
-		cJSON* spaces;
+		cJSON *spaces;
 		CreateSpacesListFromUsername(name, &spaces);
-		cJSON_AddItemToObject(*output, "spaces",
-		                        spaces);
+		cJSON_AddItemToObject(*output, "spaces", spaces);
 		return 1;
 	} else {
 		return 0;
 	}
+	sqlite3_finalize(stmt);
 
 	return 1;
+}
+char **ListSpaceMembersNames(char *name, int *outputlen) {
+    const char *sql =
+        "SELECT \"user-name\" FROM \"user-space\" WHERE \"space-name\" = ?";
+    sqlite3_stmt *stmt;
+    sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+
+    int i = 0;
+    int capacity = 128;
+    char **ret = malloc(capacity * sizeof(char *));
+
+    for (int rc = sqlite3_step(stmt); rc == SQLITE_ROW; rc = sqlite3_step(stmt)) {
+        if (i >= capacity) {
+            capacity *= 2;
+            char **tmp = realloc(ret, capacity * sizeof(char *));
+            if (!tmp) { free(ret); return NULL; }
+            ret = tmp;
+        }
+        ret[i] = strdup((const char *)sqlite3_column_text(stmt, 0));
+        i++;
+    }
+
+    *outputlen = i;
+    sqlite3_finalize(stmt);
+    return ret;
 }
 int PushEvent(int fd, char *event, cJSON *data) {
 	cJSON *payload = cJSON_CreateObject();
@@ -259,6 +309,7 @@ char *GetOtherFromChannel(const char *channel, const char *me) {
 	free(copy);
 	return result;
 }
+
 int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 	printf("%s\n", payload);
 	cJSON *responsebuild = cJSON_CreateObject();
@@ -326,12 +377,30 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			                    ->username;
 			char *where =
 			    cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
-			char *otherBoi;
-			otherBoi = GetOtherFromChannel(where, fromWho);
-			if (otherBoi) {
-				PushRecvIM(otherBoi, where, fromWho, content);
-				PushRecvIM(fromWho, where, fromWho, content);
+			chat chatCtx;
+			YAMPProcessWhere(where, fromWho, &chatCtx);
+			if (chatCtx.type == YAMP_GUILD) {
+				int outputLen;
+				char **start =
+				    ListSpaceMembersNames(chatCtx.GuildName, &outputLen);
+				for (int i = 0; i < outputLen; i++) {
+					printf("%s\n", *(start + i));
+					PushRecvIM(*(start+i), where, fromWho,
+						content);
+				}
+			} else {
+				PushRecvIM(chatCtx.OtherGuy, where, fromWho,
+				           content); // dm prob, if it fails wont do anything
+				                     // anyway, i am cpu cycle saving maxxing
+				                     // uhh via no if checks
 			}
+			PushRecvIM(fromWho, where, fromWho, content);
+		} else if (strcmp(endpoint, "getchannels") == 0) {
+			char *space =
+			    cJSON_GetObjectItem(PayloadParsed, "space")->valuestring;
+			cJSON *channels;
+			CreateChannelsListFromName(space, &channels);
+			cJSON_AddItemToObject(responsebuild, "response", channels);
 		}
 
 	} else {
