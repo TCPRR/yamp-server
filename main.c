@@ -340,7 +340,7 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
 			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
-				printf("Hello there, %s!", username);
+				printf("hello there, %s!", username);
 				cJSON_AddStringToObject(responsebuild, "response", "success");
 				cJSON *tmp;
 				CreateUsersOwnObjectFromUsername(username, &tmp);
