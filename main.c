@@ -18,11 +18,16 @@
 int client_sockets[MAX_CLIENTS] = {0};
 GHashTable *users_by_fd;
 GHashTable *users_by_name;
-
+typedef struct{
+	char* status;
+	char* RPCName;
+	char* RPCDesc;
+	char* RPCIcon;
+} status;
 typedef struct {
 	int fd;
 	char *username;
-	char *status;
+	status status;
 } user;
 
 sqlite3 *DB;
@@ -36,13 +41,19 @@ int send_framed(int fd, const char *buf, uint32_t len) {
 	return 0;
 }
 
-cJSON *CreateUserObject(char *name, char *description, char *display_name,
-                        char *status) {
+cJSON *CreateUserObject(char *name, char *description, char *display_name, char* pfp,
+                        status* status) {
 	cJSON *returnObj = cJSON_CreateObject();
 	cJSON_AddStringToObject(returnObj, "name", name);
 	cJSON_AddStringToObject(returnObj, "display_name", display_name);
 	cJSON_AddStringToObject(returnObj, "description", description);
-	cJSON_AddStringToObject(returnObj, "status", status);
+	cJSON_AddStringToObject(returnObj, "pfp", pfp);
+	cJSON* statusObj = cJSON_CreateObject();
+	cJSON_AddStringToObject(statusObj, "RPCName", status->RPCName);
+	cJSON_AddStringToObject(statusObj, "RPCDesc", status->RPCDesc);
+	cJSON_AddStringToObject(statusObj, "RPCIcon", status->RPCIcon);
+	cJSON_AddStringToObject(statusObj, "status", status->status);
+	cJSON_AddItemToObject(returnObj, "status", statusObj);
 	return returnObj;
 }
 
@@ -76,17 +87,22 @@ int CreateSpaceObjectFromName(char *name, cJSON **output) {
 	return 1;
 }
 int CreateUserObjectFromUsername(char *name, cJSON **output) {
-	const char *sql = "SELECT display_name FROM users WHERE name "
+	const char *sql = "SELECT display_name, pfp, description FROM users WHERE name "
 	                  "= ?";
 	sqlite3_stmt *stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
 
 	if (sqlite3_step(stmt) == SQLITE_ROW) {
-		*output = cJSON_CreateObject();
-		cJSON_AddStringToObject(*output, "name", name);
-		cJSON_AddStringToObject(*output, "display_name",
-		                        sqlite3_column_text(stmt, 0));
+		user* usr = g_hash_table_lookup(users_by_name, name);
+		status stat;
+		if(usr && strcmp(usr->status.status, "offline") != 0){
+			stat = usr->status;
+		} else {
+			stat.status = "offline";
+			stat.RPCName = stat.RPCDesc = stat.RPCIcon = "";
+		}
+		*output = CreateUserObject(name,sqlite3_column_text(stmt,2),sqlite3_column_text(stmt,0),sqlite3_column_text(stmt,1),&stat);
 		return 1;
 	} else {
 		return 0;
@@ -226,10 +242,7 @@ int CreateUsersOwnObjectFromUsername(char *name, cJSON **output) {
 	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
 
 	if (sqlite3_step(stmt) == SQLITE_ROW) {
-		*output = cJSON_CreateObject();
-		cJSON_AddStringToObject(*output, "name", name);
-		cJSON_AddStringToObject(*output, "display_name",
-		                        sqlite3_column_text(stmt, 0));
+		CreateUserObjectFromUsername(name,output);
 		cJSON *spaces;
 		CreateSpacesListFromUsername(name, &spaces);
 		cJSON_AddItemToObject(*output, "spaces", spaces);
@@ -267,6 +280,39 @@ char **ListSpaceMembersNames(char *name, int *outputlen) {
     sqlite3_finalize(stmt);
     return ret;
 }
+cJSON* CreateMessageObject(char* author, char* content, char* where){
+	cJSON* object = cJSON_CreateObject();
+	cJSON_AddStringToObject(object,"author",author);
+	cJSON_AddStringToObject(object,"content",content);
+	cJSON_AddStringToObject(object,"where",where);
+	return object;
+}
+void InsertMessage(char *where, char *author, char *content) {
+	const char *sql =
+	"INSERT INTO \"messages\" (\"where\", \"author\", \"content\", \"timestamp\") VALUES (?, ?, ?, ?)";
+	sqlite3_stmt *stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, where,    -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, author,   -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 3, content,  -1, SQLITE_STATIC);
+	sqlite3_bind_int (stmt, 4, (int)time(NULL));
+	sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+}
+cJSON* GetMessageHistory(char* where){
+	cJSON* list = cJSON_CreateArray();
+	const char *sql =
+	"SELECT \"author\",\"content\" FROM \"messages\" WHERE \"where\" = ? ORDER BY \"timestamp\" ASC";
+		sqlite3_stmt *stmt;
+		sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+		sqlite3_bind_text(stmt, 1, where, -1, SQLITE_STATIC);
+
+		for (int rc = sqlite3_step(stmt); rc == SQLITE_ROW; rc = sqlite3_step(stmt)) {
+			cJSON_AddItemToArray(list,CreateMessageObject(sqlite3_column_text(stmt,0),sqlite3_column_text(stmt,1),where));
+		}
+
+		return list;
+}
 int PushEvent(int fd, char *event, cJSON *data) {
 	cJSON *payload = cJSON_CreateObject();
 	cJSON_AddStringToObject(payload, "type", "event");
@@ -294,20 +340,6 @@ char *MakeDMChannel(const char *a, const char *b) {
 		return g_strdup_printf("%s|%s", a, b);
 	else
 		return g_strdup_printf("%s|%s", b, a);
-}
-char *GetOtherFromChannel(const char *channel, const char *me) {
-	char *copy = strdup(channel);
-	char *dash = strchr(copy, '|');
-	if (!dash) {
-		free(copy);
-		return NULL;
-	}
-	*dash = '\0';
-	char *a = copy;
-	char *b = dash + 1;
-	char *result = strcmp(a, me) == 0 ? strdup(b) : strdup(a);
-	free(copy);
-	return result;
 }
 
 int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
@@ -342,16 +374,16 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
 				printf("hello there, %s!", username);
 				cJSON_AddStringToObject(responsebuild, "response", "success");
-				cJSON *tmp;
-				CreateUsersOwnObjectFromUsername(username, &tmp);
-				cJSON_AddItemToObject(responsebuild, "user", tmp);
 				user *newUser = malloc(sizeof(user));
 				newUser->username = username;
 				newUser->fd = sockfd;
-				newUser->status = "online";
+				newUser->status = (status){"online","","",""};
 				g_hash_table_insert(users_by_name, username, (gpointer)newUser);
 				g_hash_table_insert(users_by_fd, GINT_TO_POINTER(sockfd),
-				                    (gpointer)newUser);
+									(gpointer)newUser);
+				cJSON *tmp;
+				CreateUsersOwnObjectFromUsername(username, &tmp);
+				cJSON_AddItemToObject(responsebuild, "user", tmp);
 			} else {
 
 				cJSON_AddStringToObject(responsebuild, "response", "fail");
@@ -387,20 +419,34 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 					printf("%s\n", *(start + i));
 					PushRecvIM(*(start+i), where, fromWho,
 						content);
+					InsertMessage(where,fromWho,content);
 				}
-			} else {
+			} else if (chatCtx.type == YAMP_DM) {
 				PushRecvIM(chatCtx.OtherGuy, where, fromWho,
-				           content); // dm prob, if it fails wont do anything
-				                     // anyway, i am cpu cycle saving maxxing
-				                     // uhh via no if checks
+				           content);
 				PushRecvIM(fromWho, where, fromWho, content);
 			}
 		} else if (strcmp(endpoint, "getchannels") == 0) {
-			char *space =
+			char *guild =
 			    cJSON_GetObjectItem(PayloadParsed, "space")->valuestring;
 			cJSON *channels;
-			CreateChannelsListFromName(space, &channels);
+			CreateChannelsListFromName(guild, &channels);
 			cJSON_AddItemToObject(responsebuild, "response", channels);
+		} else if (strcmp(endpoint, "GetUserDetails") == 0) {
+			cJSON *details;
+			CreateUserObjectFromUsername(cJSON_GetObjectItem(PayloadParsed,"name")->valuestring, &details);
+			cJSON_AddItemToObject(responsebuild, "response", details);
+		} else if (strcmp(endpoint, "GetGuildDetails") == 0) {
+			cJSON *details;
+			CreateSpaceObjectFromName(cJSON_GetObjectItem(PayloadParsed,"name")->valuestring, &details);
+			cJSON_AddItemToObject(responsebuild, "response", details);
+		} else if (strcmp(endpoint,"GetMessageHistory") == 0){ //might use pascal case more... beware of breaking changes to other ones soon
+			cJSON *messages = GetMessageHistory(cJSON_GetObjectItem(PayloadParsed, "where")->valuestring);
+			cJSON_AddItemToObject(responsebuild, "response", messages);
+		} else if (strcmp(endpoint,"ChangeChannelList") == 0){
+
+		} else if (strcmp(endpoint,"CreateGuild") == 0){
+
 		}
 
 	} else {
