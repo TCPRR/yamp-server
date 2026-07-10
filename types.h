@@ -1,3 +1,4 @@
+#pragma once
 #define YAMP_GUILD 1
 #define YAMP_DM 0
 
@@ -9,3 +10,16 @@ typedef struct {
 	char *GuildName; // Above but for guilds!
 	char *ChannelName; // same same, but differeeeent :sob:
 } chat;
+typedef struct{
+	char* status;
+	char* RPCName;
+	char* RPCDesc;
+	char* RPCIcon;
+} status;
+typedef struct {
+	int fd;
+	char *username;
+	char* description;
+	char* pfp;
+	status status;
+} user;
