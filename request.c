@@ -7,7 +7,6 @@
 #include "globals.h"
 #include "handlers.h"
 int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
-	printf("%s\n", payload);
 	cJSON *responsebuild = cJSON_CreateObject();
 	cJSON *PayloadParsed = cJSON_Parse(payload);
 	if (!PayloadParsed) {
@@ -85,12 +84,13 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 					printf("%s\n", *(start + i));
 					PushRecvIM(*(start+i), where, fromWho,
 						content);
-					InsertMessage(where,fromWho,content);
 				}
+					InsertMessage(where,fromWho,content);
 			} else if (chatCtx.type == YAMP_DM) {
 				PushRecvIM(chatCtx.OtherGuy, where, fromWho,
 				           content);
 				PushRecvIM(fromWho, where, fromWho, content);
+					InsertMessage(where,fromWho,content);
 			}
 		} else if (strcmp(endpoint, "getchannels") == 0) {
 			char *guild =

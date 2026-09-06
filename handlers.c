@@ -276,7 +276,7 @@ int PushEvent(int fd, char *event, cJSON *data) {
 	cJSON_AddStringToObject(payload, "type", "event");
 	cJSON_AddStringToObject(payload, "event", event);
 	cJSON_AddItemToObject(payload, "data", data);
-	YAMPSend(fd, cJSON_Print(payload), strlen(cJSON_Print(payload)) + 1);
+	YAMPSend(fd, cJSON_Print(payload), strlen(cJSON_Print(payload)));
 }
 int PushRecvIM(char *toWho, char *where, char *fromWho, char *content) {
 	cJSON *payload = cJSON_CreateObject();

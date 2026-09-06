@@ -67,7 +67,7 @@ int main() { // select part of the multi-socket pooling thing is taken from a
 		if (FD_ISSET(master_socket, &readfds)) {
 			int new_socket = accept(master_socket, NULL, NULL);
 
-			YAMPSend(new_socket, "{\"type\":\"hello\"}", 17);
+			YAMPSend(new_socket, "{\"type\":\"hello\"}", 16);
 
 			for (int i = 0; i < MAX_CLIENTS; i++) {
 				if (client_sockets[i] == 0) {
@@ -81,24 +81,13 @@ int main() { // select part of the multi-socket pooling thing is taken from a
 		for (int i = 0; i < MAX_CLIENTS; i++) {
 			sd = client_sockets[i];
 			if (FD_ISSET(sd, &readfds)) {
-				uint32_t payloadlen;
-
-				if (read(sd, &payloadlen, 4) != 4) {
-					user searchusr;
-					searchusr.fd = sd;
-					const user* resultusr = hashmap_get(UsersByFD,&searchusr);
-					hashmap_delete(UsersByName,resultusr);
-					hashmap_delete(UsersByFD,&searchusr);
-					close(sd);
-					client_sockets[i] = 0;
-				} else {
-					payloadlen = ntohl(payloadlen);
-					char *payload = malloc(payloadlen);
-					if(read(sd, payload, payloadlen)==payloadlen){
-					char *response;
+				uint32_t len;
+				char* payload;
+				if (YAMPRecv(sd,&payload,&len)) {
+					printf("%s\n",payload);
+					char* response;
 					if (ProcessRequest(payload, &response, i, sd)) {
-						YAMPSend(sd, response, strlen(response) + 1);
-					}
+						YAMPSend(sd, response, strlen(response));
 					}
 				}
 			}
