@@ -16,3 +16,4 @@ void InsertMessage(char *where, char *author, char *content);
 cJSON* GetMessageHistory(char* where);
 int PushEvent(int fd, char *event, cJSON *data);
 int PushRecvIM(char *toWho, char *where, char *fromWho, char *content);
+int PushStatusUpdate(char *toWho, char *who, status status);

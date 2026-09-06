@@ -19,6 +19,7 @@ typedef struct{
 typedef struct {
 	int fd;
 	char *username;
+	char* displayname;
 	char* description;
 	char* pfp;
 	status status;

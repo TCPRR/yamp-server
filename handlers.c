@@ -7,18 +7,17 @@
 #include "network.h"
 #include <stdlib.h>
 #include <time.h>
-cJSON *CreateUserObject(const char *name, const char *description, const char *display_name, const char* pfp,
-                        status* status) {
+cJSON *CreateUserObject(user* user) {
 	cJSON *returnObj = cJSON_CreateObject();
-	cJSON_AddStringToObject(returnObj, "name", name);
-	cJSON_AddStringToObject(returnObj, "display_name", display_name);
-	cJSON_AddStringToObject(returnObj, "description", description);
-	cJSON_AddStringToObject(returnObj, "pfp", pfp);
+	cJSON_AddStringToObject(returnObj, "name", user->username);
+	cJSON_AddStringToObject(returnObj, "display_name", user->displayname);
+	cJSON_AddStringToObject(returnObj, "description", user->description);
+	cJSON_AddStringToObject(returnObj, "pfp", user->pfp);
 	cJSON* statusObj = cJSON_CreateObject();
-	cJSON_AddStringToObject(statusObj, "RPCName", status->RPCName);
-	cJSON_AddStringToObject(statusObj, "RPCDesc", status->RPCDesc);
-	cJSON_AddStringToObject(statusObj, "RPCIcon", status->RPCIcon);
-	cJSON_AddStringToObject(statusObj, "status", status->status);
+	cJSON_AddStringToObject(statusObj, "RPCName", user->status.RPCName);
+	cJSON_AddStringToObject(statusObj, "RPCDesc", user->status.RPCDesc);
+	cJSON_AddStringToObject(statusObj, "RPCIcon", user->status.RPCIcon);
+	cJSON_AddStringToObject(statusObj, "status", user->status.status);
 	cJSON_AddItemToObject(returnObj, "status", statusObj);
 	return returnObj;
 }
@@ -42,30 +41,36 @@ int CreateSpaceObjectFromName(char *name, cJSON **output) {
 	return 1;
 }
 int CreateUserObjectFromUsername(char *name, cJSON **output) {
-	const char *sql = "SELECT display_name, pfp, description FROM users WHERE name "
-	                  "= ?";
+	const char *sql = "SELECT display_name, pfp, description FROM users WHERE name = ?";
 	sqlite3_stmt *stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
 
 	if (sqlite3_step(stmt) == SQLITE_ROW) {
-        user search;
-        search.username=name;
-		const user* usr = hashmap_get(UsersByName,&search);
-		status stat;
-		if(usr && strcmp(usr->status.status, "offline") != 0){
-			stat = usr->status;
+		user search;
+		search.username = name;
+		const user *usr = hashmap_get(UsersByName, &search);
+
+		user built;
+		built.username = name;
+		built.displayname = (char*)sqlite3_column_text(stmt, 0);
+		built.pfp = (char*)sqlite3_column_text(stmt, 1);
+		built.description = (char*)sqlite3_column_text(stmt, 2);
+
+		if (usr && strcmp(usr->status.status, "offline") != 0) {
+			built.status = usr->status;
 		} else {
-			stat.status = "offline";
-			stat.RPCName = stat.RPCDesc = stat.RPCIcon = "";
+			built.status.status = "offline";
+			built.status.RPCName = built.status.RPCDesc = built.status.RPCIcon = "";
 		}
-		*output = CreateUserObject(name,(const char*)sqlite3_column_text(stmt,2),(const char*)sqlite3_column_text(stmt,0),(const char*)sqlite3_column_text(stmt,1),&stat);
+
+		*output = CreateUserObject(&built);
+		sqlite3_finalize(stmt);
 		return 1;
 	} else {
+		sqlite3_finalize(stmt);
 		return 0;
 	}
-
-	return 1;
 }
 int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 
@@ -293,5 +298,26 @@ int PushRecvIM(char *toWho, char *where, char *fromWho, char *content) {
 		PushEvent(fd, "recvim", payload);
 	} else {
 		printf("a message was canceled due to the other side being offline!\n");
+	}
+}
+int PushStatusUpdate(char *toWho, char *who, status status) {
+	cJSON *payload = cJSON_CreateObject();
+    user search;
+    search.username = toWho;
+	const user *usr = hashmap_get(UsersByName,&search);
+	if (usr) {
+		int fd = usr->fd;
+		printf("Pushing a status update event to %s at %d, with the status %s\n",
+		       toWho, fd, status.status);
+		cJSON* stat = cJSON_CreateObject();
+		cJSON_AddStringToObject(stat, "status", status.status);
+		cJSON_AddStringToObject(stat, "RPCDesc", status.RPCDesc);
+		cJSON_AddStringToObject(stat, "RPCIcon", status.RPCIcon);
+		cJSON_AddStringToObject(stat, "RPCName", status.RPCName);
+		cJSON_AddStringToObject(payload, "name", who);
+		cJSON_AddItemToObject(payload, "status", stat);
+		PushEvent(fd, "StatusUpdate", payload);
+	} else {
+		printf("a status update msg was canceled due to the other side being offline!\n");
 	}
 }
