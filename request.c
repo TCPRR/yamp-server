@@ -7,12 +7,12 @@
 #include "globals.h"
 #include "handlers.h"
 int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
-	if(con.LastEndpoint-time(NULL)<1){
+	if(time(NULL)-con.LastEndpoint<1){
 		return 0;
 	}else{
 		con.LastEndpoint=time(NULL);
 	}
-	if(con.LastRegistration-time(NULL)<60){
+	if(time(NULL)-con.LastRegistration<60){
 		return 0;
 	}
 	cJSON *responsebuild = cJSON_CreateObject();
@@ -119,7 +119,7 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 			cJSON *usernamep = cJSON_GetObjectItem(PayloadParsed, "username");
 			cJSON *passwdp = cJSON_GetObjectItem(PayloadParsed, "password");
 			cJSON *resp = cJSON_CreateObject();
-			if((usernamep && passwdp)){
+			if(!(usernamep && passwdp)){
 				cJSON_AddBoolToObject(responsebuild, "succeed", 0);
 			}else{
 				char* username = usernamep->valuestring;
@@ -249,8 +249,10 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 		printf("no req november\n");
 	}
 	cJSON_Delete(PayloadParsed);
-	(*response) = cJSON_Print(responsebuild);
-	printf(cJSON_Print(responsebuild));
-	printf("\n");
+	char* resp = cJSON_Print(responsebuild);
+	(*response) = resp;
+	printf("%s\n",resp);
+	free(resp);
+	cJSON_Delete(responsebuild);
 	return 1;
 }
