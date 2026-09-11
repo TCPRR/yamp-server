@@ -6,7 +6,15 @@
 #include "hmap/hashmap.h"
 #include "globals.h"
 #include "handlers.h"
-int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
+int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
+	if(con.LastEndpoint-time(NULL)<1){
+		return 0;
+	}else{
+		con.LastEndpoint=time(NULL);
+	}
+	if(con.LastRegistration-time(NULL)<60){
+		return 0;
+	}
 	cJSON *responsebuild = cJSON_CreateObject();
 	cJSON *PayloadParsed = cJSON_Parse(payload);
 	if (!PayloadParsed) {
@@ -40,8 +48,9 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 				cJSON_AddStringToObject(responsebuild, "response", "success");
 				user *newUser = malloc(sizeof(user));
 				newUser->username = username;
-    			newUser->displayname = strdup((const char *)sqlite3_column_text(stmt, 1));
-				newUser->fd = sockfd;
+				newUser->displayname =
+					strdup((const char *)sqlite3_column_text(stmt, 1));
+				newUser->con=con;
 				newUser->status = (status){"online", "", "", ""};
 				hashmap_set(UsersByFD, newUser);
 				hashmap_set(UsersByName, newUser);
@@ -105,9 +114,23 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 				cJSON_AddStringToObject(responsebuild, "response", "fail");
 			}
 			sqlite3_finalize(stmt);
+		} else if(strcmp(endpoint,"register")==0){
+			cJSON *emailp = cJSON_GetObjectItem(PayloadParsed, "email"); // for future
+			cJSON *usernamep = cJSON_GetObjectItem(PayloadParsed, "username");
+			cJSON *passwdp = cJSON_GetObjectItem(PayloadParsed, "password");
+			cJSON *resp = cJSON_CreateObject();
+			if((usernamep && passwdp)){
+				cJSON_AddBoolToObject(responsebuild, "succeed", 0);
+			}else{
+				char* username = usernamep->valuestring;
+				char* passwd = passwdp->valuestring;
+				cJSON_AddBoolToObject(responsebuild, "succeed", RegisterUserAccount(username, passwd));
+			}
+			con.LastRegistration=time(NULL);
+			cJSON_AddItemToObject(responsebuild, "response", resp);
 		} else if (strcmp(endpoint, "buddylist") == 0) {
 			user search;
-			search.fd = sockfd;
+			search.con=con;
 			char *username =
 				((user *)(hashmap_get(UsersByFD, &search)))->username;
 			printf("%s is asking for its buddies\n", username);
@@ -121,7 +144,7 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			char *content =
 				cJSON_GetObjectItem(PayloadParsed, "content")->valuestring;
 			user search;
-			search.fd = sockfd;
+			search.con=con;
 			char *fromWho =
 				((user *)(hashmap_get(UsersByFD, &search)))->username;
 			char *where =
@@ -188,11 +211,44 @@ int ProcessRequest(char *payload, char **response, int sockid, int sockfd) {
 			cJSON_AddStringToObject(responsebuild, "response", "success");
 
 		} else if (strcmp(endpoint, "CreateChannel") == 0) {
+		} else if (strcmp(endpoint, "SendFriendReq") == 0) {
+			cJSON *targetp = cJSON_GetObjectItem(PayloadParsed, "to");
+			char *target = targetp ? targetp->valuestring : "";
+			user search;
+			search.con=con;
+			const user *usr = hashmap_get(UsersByFD, &search);
+			if (usr) {
+				PushFQ(target, usr->username);
+			}
+		} else if (strcmp(endpoint, "AcceptFriendReq")) {
+			cJSON *senderp = cJSON_GetObjectItem(PayloadParsed, "user");
+			if (senderp) {
+				char *sender = senderp->valuestring;
+				user search;
+				search.con = con;
+				const user *usr = hashmap_get(UsersByFD, &search);
+				if (usr) {
+					DestroyFriendReq(sender,usr->username);
+					CreateFriendship(sender,usr->username);
+				}
+			}
+		} else if (strcmp(endpoint, "DenyFriendReq")) {
+			cJSON *senderp = cJSON_GetObjectItem(PayloadParsed, "user");
+			if (senderp) {
+				char *sender = senderp->valuestring;
+				user search;
+				search.con = con;
+				const user *usr = hashmap_get(UsersByFD, &search);
+				if (usr) {
+					DestroyFriendReq(sender,usr->username);
+				}
+			}
 		}
 
 	} else {
 		printf("no req november\n");
 	}
+	cJSON_Delete(PayloadParsed);
 	(*response) = cJSON_Print(responsebuild);
 	printf(cJSON_Print(responsebuild));
 	printf("\n");

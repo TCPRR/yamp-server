@@ -51,13 +51,13 @@ void hmap_username_free(void *item){
 }
 
 uint64_t hmap_userfd_hash(const void *item, uint64_t seed0, uint64_t seed1){
-    int fd = ((user*)item)->fd;
+    int fd = ((user*)item)->con.fd;
     return hashmap_sip(&fd, sizeof(fd), seed0, seed1);
 }
 int hmap_userfd_compare(const void *a, const void *b, void *udata){
-	if(((const user*)a)->fd == ((const user*)b)->fd){
+	if(((const user*)a)->con.fd == ((const user*)b)->con.fd){
 		return 0;
-	}else if(((const user*)a)->fd < ((const user*)b)->fd){
+	}else if(((const user*)a)->con.fd < ((const user*)b)->con.fd){
 		return -1;
 	} else{
 		return 1;
@@ -82,7 +82,7 @@ void sha256_hex(const char *input, char *output_hex) {
 	unsigned char hash[SHA256_DIGEST_LENGTH];
 	SHA256((unsigned char *)input, strlen(input), hash);
 
-	// Convert to hex string
+	// convert to hex string
 	for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
 		sprintf(output_hex + (i * 2), "%02x", hash[i]);
 	}

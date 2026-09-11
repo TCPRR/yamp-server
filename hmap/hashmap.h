@@ -2,6 +2,9 @@
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
+// Slightly modified by winsped, added the typedef definition of hmap
+// winsped owns 0 rights in this code, all rights belng to Joshua J Baker
+
 #ifndef HASHMAP_H
 #define HASHMAP_H
 

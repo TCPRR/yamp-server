@@ -1,4 +1,5 @@
 #pragma once
+#include <openssl/ssl.h>
 #define YAMP_GUILD 1
 #define YAMP_DM 0
 
@@ -17,7 +18,15 @@ typedef struct{
 	char* RPCIcon;
 } status;
 typedef struct {
+	int connected;
+	int encrypt;
 	int fd;
+	SSL *ssl;
+	unsigned long long LastRegistration;
+	unsigned long long LastEndpoint;
+} Connection;
+typedef struct {
+	Connection con;
 	char *username;
 	char* displayname;
 	char* description;

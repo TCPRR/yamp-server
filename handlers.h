@@ -2,6 +2,7 @@
 #include "types.h"
 #include "globals.h"
 #include "network.h"
+int RegisterUserAccount(char* name, char* passwd);
 cJSON *CreateUserObject(const char *name, const char *description, const char *display_name, const char* pfp,
                         status* status);
 int CreateSpaceObjectFromName(char *name, cJSON **output);
@@ -17,3 +18,7 @@ cJSON* GetMessageHistory(char* where);
 int PushEvent(int fd, char *event, cJSON *data);
 int PushRecvIM(char *toWho, char *where, char *fromWho, char *content);
 int PushStatusUpdate(char *toWho, char *who, status status);
+int PushFQ(char *toWho, char *fromWho);
+void CreateFriendReq(char* sender, char* receiver);
+void DestroyFriendReq(char* sender, char* receiver);
+void CreateFriendship(char* sender, char* receiver);
