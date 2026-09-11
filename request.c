@@ -6,6 +6,7 @@
 #include "hmap/hashmap.h"
 #include "globals.h"
 #include "handlers.h"
+#include "types.h"
 int ProcessRequest(char *payload, char **response, int sockid, Connection* con) {
 	if(time(NULL)-con->LastEndpoint<1){
 		return 0;
@@ -32,10 +33,13 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 	if (strcmp(type, "request") == 0) {
 		cJSON_AddStringToObject(responsebuild, "type", "response");
 		cJSON *reqid = cJSON_GetObjectItem(PayloadParsed, "reqid");
+		if(reqid){
 		cJSON_AddItemToObject(responsebuild, "reqid",
 							  cJSON_Duplicate(reqid, cJSON_True));
+		}
+		cJSON* endpointp = cJSON_GetObjectItem(PayloadParsed, "endpoint");
 		char *endpoint =
-			cJSON_GetObjectItem(PayloadParsed, "endpoint")->valuestring;
+			endpointp->valuestring;
 		if (strcmp(endpoint, "login") == 0) {
 			cJSON* usernamep = cJSON_GetObjectItem(PayloadParsed, "username");
 			cJSON* passwdp = cJSON_GetObjectItem(PayloadParsed, "password");
@@ -142,18 +146,24 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 		} else if (strcmp(endpoint, "buddylist") == 0) {
 			user search;
 			search.con=*con;
-			char *username =
-				((user *)(hashmap_get(UsersByFD, &search)))->username;
-			printf("%s is asking for its buddies\n", username);
+			user* usr = hashmap_get(UsersByFD, &search);
+			if(!usr){
+				return 0;
+			}
+			printf("%s is asking for its buddies\n", usr->username);
 			cJSON *tmp;
-			if (username) {
-				if (CreateFriendsListFromUsername(username, &tmp)) {
+			if (usr->username) {
+				if (CreateFriendsListFromUsername(usr->username, &tmp)) {
 					cJSON_AddItemToObject(responsebuild, "response", tmp);
 				}
 			}
 		} else if (strcmp(endpoint, "sendim") == 0) {
-			char *content =
-				cJSON_GetObjectItem(PayloadParsed, "content")->valuestring;
+			cJSON* contentp =
+				cJSON_GetObjectItem(PayloadParsed, "content");
+			if(!contentp){
+				return 0;
+			}
+			char* content = contentp->valuestring;
 			user search;
 			search.con=*con;
 			user* usr = hashmap_get(UsersByFD, &search);
@@ -161,11 +171,19 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 				return 0;
 			}
 			char* fromWho = usr->username;
+			cJSON* rwhere = cJSON_GetObjectItem(PayloadParsed, "where");
+			if(!rwhere){
+				return 0;
+			}
 			char *where =
-				cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
+				rwhere->valuestring;
 			chat wherep;
 			if(!YAMPProcessWhere(where, fromWho, &wherep)){
 				return 0;
+			} else {
+				if(wherep.type == YAMP_GUILD && !IsInSpace(usr->username, wherep.GuildName)){
+					return 0;
+				}
 			}
 			chat chatCtx;
 			YAMPProcessWhere(where, fromWho, &chatCtx);
@@ -184,21 +202,42 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 				InsertMessage(where, fromWho, content);
 			}
 		} else if (strcmp(endpoint, "getchannels") == 0) {
+			user search;
+			search.con=*con;
+			user* usr = hashmap_get(UsersByFD, &search);
+			if(!usr){
+				return 0;
+			}
+			cJSON* guildp = cJSON_GetObjectItem(PayloadParsed, "space");
+			if(!guildp){
+				return 0;
+			}
 			char *guild =
-				cJSON_GetObjectItem(PayloadParsed, "space")->valuestring;
+				guildp->valuestring;
+			if(!IsInSpace(usr->username, guild)){
+				return 0;
+			}
 			cJSON *channels;
 			CreateChannelsListFromName(guild, &channels);
 			cJSON_AddItemToObject(responsebuild, "response", channels);
 		} else if (strcmp(endpoint, "GetUserDetails") == 0) {
 			cJSON *details;
+			cJSON *namep=cJSON_GetObjectItem(PayloadParsed, "name");
+			if(!namep){
+				return 0;
+			}
 			CreateUserObjectFromUsername(
-				cJSON_GetObjectItem(PayloadParsed, "name")->valuestring,
+				namep->valuestring,
 				&details);
 			cJSON_AddItemToObject(responsebuild, "response", details);
 		} else if (strcmp(endpoint, "GetGuildDetails") == 0) {
+			cJSON *namep=cJSON_GetObjectItem(PayloadParsed, "name");
+			if(!namep){
+				return 0;
+			}
 			cJSON *details;
 			CreateSpaceObjectFromName(
-				cJSON_GetObjectItem(PayloadParsed, "name")->valuestring,
+				namep->valuestring,
 				&details);
 			cJSON_AddItemToObject(responsebuild, "response", details);
 		} else if (strcmp(endpoint, "GetMessageHistory") ==
@@ -212,7 +251,7 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 				return 0;
 			}
 			char* fromWho = usr->username;
-			
+
 			char *where =
 				cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
 			chat wherep;

@@ -253,6 +253,19 @@ char **ListSpaceMembersNames(char *name, int *outputlen) {
 	sqlite3_finalize(stmt);
 	return ret;
 }
+int IsInSpace(char *username, char* spacename) {
+	const char *sql =
+		"SELECT \"user-name\" FROM \"user-space\" WHERE \"space-name\" = ? AND \"user-name\" = ?";
+	sqlite3_stmt *stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, spacename, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, username, -1, SQLITE_STATIC);
+	if(sqlite3_step(stmt)==SQLITE_ROW){
+		sqlite3_finalize(stmt);
+		return 1;
+	}
+	return 0;
+}
 cJSON *CreateMessageObject(char *author, char *content, char *where) {
 	cJSON *object = cJSON_CreateObject();
 	cJSON_AddStringToObject(object, "author", author);

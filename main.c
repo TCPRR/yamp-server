@@ -18,6 +18,7 @@
 #include "globals.h"
 #include "network.h"
 #include "request.h"
+#include "config.h"
 #define PORT 5224
 #define SSLPORT 5225
 #define MAX_CLIENTS 1024
@@ -43,6 +44,7 @@ int main() {
 
 	// create and configure master socket, the one that will receive the
 	// incomings
+	SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
 	master_socket = socket(AF_INET, SOCK_STREAM, 0);
 	master_tls_socket = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -50,12 +52,11 @@ int main() {
 	bind(master_tls_socket, (struct sockaddr *)&tlsaddress, sizeof(address));
 	listen(master_socket, 3);
 	listen(master_tls_socket, 3);
-	SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
 	SSL_CTX_use_certificate_chain_file(
-		ctx, "/etc/letsencrypt/live/snow32.defautluser0.xyz/fullchain.pem");
+		ctx, CHAINFILE_PATH);
 
 	SSL_CTX_use_PrivateKey_file(
-		ctx, "/etc/letsencrypt/live/snow32.defautluser0.xyz/privkey.pem", SSL_FILETYPE_PEM);
+		ctx, PRIVKEY_PATH, SSL_FILETYPE_PEM);
 	SSL *serverssl = SSL_new(ctx);
 	SSL_set_fd(serverssl, master_tls_socket);
 
@@ -123,7 +124,7 @@ int main() {
 						client_sockets[i].fd = new_socket;
 						client_sockets[i].ssl = ssl;
 						client_sockets[i].connected = 1;
-						client_sockets[i].encrypt = 0;
+						client_sockets[i].encrypt = 1;
 						break;
 					}
 				}
@@ -155,6 +156,7 @@ int main() {
 							TLSYAMPSend(client_sockets[i].ssl, response,
 										strlen(response));
 						}
+						free(payload);
 					} else {
 						// disconnected or tried to abuse the server
 						SSL_free(client_sockets[i].ssl);
@@ -170,6 +172,7 @@ int main() {
 						if (ProcessRequest(payload, &response, i, &client_sockets[i])) {
 							YAMPSend(sd, response, strlen(response));
 						}
+						free(payload);
 					} else {
 						// disconnected or tried to abuse the server
 						close(sd);

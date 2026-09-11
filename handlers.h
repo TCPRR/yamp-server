@@ -22,3 +22,4 @@ int PushFQ(char *toWho, char *fromWho);
 void CreateFriendReq(char* sender, char* receiver);
 void DestroyFriendReq(char* sender, char* receiver);
 void CreateFriendship(char* sender, char* receiver);
+int IsInSpace(char *username, char* spacename);
