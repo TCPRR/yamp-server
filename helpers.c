@@ -30,44 +30,43 @@ gboolean YAMPProcessWhere(char *where, char *curUsername, chat *out) {
 		retval.ChannelName = NULL;
 		retval.type = YAMP_DM;
 		retval.where = dupedwhere;
-		if (strcmp(minus+1, curUsername) == 0) {
+		if (strcmp(safewhere, curUsername) == 0) {
+			retval.OtherGuy = minus + 1;
+		} else if (strcmp(minus + 1, curUsername) == 0) {
 			retval.OtherGuy = safewhere;
 		} else {
-			retval.OtherGuy = minus + 1;
+			free(dupedwhere);
+			free(safewhere);
+			return FALSE; // who the FUCK are you
 		}
 		retval.GuildName = NULL;
 		*out = retval;
 		return TRUE;
 	}
 }
-uint64_t hmap_username_hash(const void *item, uint64_t seed0, uint64_t seed1){
-	return hashmap_sip(((user*)item)->username,strlen(((user*)item)->username),seed0,seed1);
+uint64_t hmap_username_hash(const void *item, uint64_t seed0, uint64_t seed1) {
+	return hashmap_sip(((user *)item)->username,
+					   strlen(((user *)item)->username), seed0, seed1);
 }
-int hmap_username_compare(const void *a, const void *b, void *udata){
-	return strcmp(((const user*)a)->username,((const user*)b)->username);
+int hmap_username_compare(const void *a, const void *b, void *udata) {
+	return strcmp(((const user *)a)->username, ((const user *)b)->username);
 }
-void hmap_username_free(void *item){
+void hmap_username_free(void *item) {}
 
+uint64_t hmap_userfd_hash(const void *item, uint64_t seed0, uint64_t seed1) {
+	int fd = ((user *)item)->con.fd;
+	return hashmap_sip(&fd, sizeof(fd), seed0, seed1);
 }
-
-uint64_t hmap_userfd_hash(const void *item, uint64_t seed0, uint64_t seed1){
-    int fd = ((user*)item)->con.fd;
-    return hashmap_sip(&fd, sizeof(fd), seed0, seed1);
-}
-int hmap_userfd_compare(const void *a, const void *b, void *udata){
-	if(((const user*)a)->con.fd == ((const user*)b)->con.fd){
+int hmap_userfd_compare(const void *a, const void *b, void *udata) {
+	if (((const user *)a)->con.fd == ((const user *)b)->con.fd) {
 		return 0;
-	}else if(((const user*)a)->con.fd < ((const user*)b)->con.fd){
+	} else if (((const user *)a)->con.fd < ((const user *)b)->con.fd) {
 		return -1;
-	} else{
+	} else {
 		return 1;
 	}
 }
-void hmap_userfd_free(void *item){
-
-}
-
-
+void hmap_userfd_free(void *item) {}
 
 char *MakeDMChannel(const char *a, const char *b) {
 	if (strcmp(a, b) < 0)
@@ -75,8 +74,6 @@ char *MakeDMChannel(const char *a, const char *b) {
 	else
 		return g_strdup_printf("%s|%s", b, a);
 }
-
-
 
 void sha256_hex(const char *input, char *output_hex) {
 	unsigned char hash[SHA256_DIGEST_LENGTH];

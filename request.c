@@ -6,13 +6,13 @@
 #include "hmap/hashmap.h"
 #include "globals.h"
 #include "handlers.h"
-int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
-	if(time(NULL)-con.LastEndpoint<1){
+int ProcessRequest(char *payload, char **response, int sockid, Connection* con) {
+	if(time(NULL)-con->LastEndpoint<1){
 		return 0;
 	}else{
-		con.LastEndpoint=time(NULL);
+		con->LastEndpoint=time(NULL);
 	}
-	if(time(NULL)-con.LastRegistration<60){
+	if(time(NULL)-con->LastRegistration<60){
 		return 0;
 	}
 	cJSON *responsebuild = cJSON_CreateObject();
@@ -22,7 +22,13 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 			   "socketing code is faulty\n");
 		return 0;
 	}
-	char *type = cJSON_GetObjectItem(PayloadParsed, "type")->valuestring;
+	cJSON* typep = cJSON_GetObjectItem(PayloadParsed, "type");
+	char *type;
+	if(typep){
+		type=typep->valuestring;
+	}else{
+		return 0;
+	}
 	if (strcmp(type, "request") == 0) {
 		cJSON_AddStringToObject(responsebuild, "type", "response");
 		cJSON *reqid = cJSON_GetObjectItem(PayloadParsed, "reqid");
@@ -31,10 +37,15 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 		char *endpoint =
 			cJSON_GetObjectItem(PayloadParsed, "endpoint")->valuestring;
 		if (strcmp(endpoint, "login") == 0) {
+			cJSON* usernamep = cJSON_GetObjectItem(PayloadParsed, "username");
+			cJSON* passwdp = cJSON_GetObjectItem(PayloadParsed, "password");
+			if(!(usernamep && passwdp)){
+				return 0;
+			}
 			char *username = strdup(
-				cJSON_GetObjectItem(PayloadParsed, "username")->valuestring);
+				usernamep->valuestring);
 			char *passwd =
-				cJSON_GetObjectItem(PayloadParsed, "password")->valuestring;
+				passwdp->valuestring;
 			char hashedPassword[65];
 			sha256_hex(passwd, hashedPassword);
 			const char *sql = "SELECT name, display_name FROM users WHERE name "
@@ -50,7 +61,7 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 				newUser->username = username;
 				newUser->displayname =
 					strdup((const char *)sqlite3_column_text(stmt, 1));
-				newUser->con=con;
+				newUser->con=*con;
 				newUser->status = (status){"online", "", "", ""};
 				hashmap_set(UsersByFD, newUser);
 				hashmap_set(UsersByName, newUser);
@@ -126,11 +137,11 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 				char* passwd = passwdp->valuestring;
 				cJSON_AddBoolToObject(responsebuild, "succeed", RegisterUserAccount(username, passwd));
 			}
-			con.LastRegistration=time(NULL);
+			con->LastRegistration=time(NULL);
 			cJSON_AddItemToObject(responsebuild, "response", resp);
 		} else if (strcmp(endpoint, "buddylist") == 0) {
 			user search;
-			search.con=con;
+			search.con=*con;
 			char *username =
 				((user *)(hashmap_get(UsersByFD, &search)))->username;
 			printf("%s is asking for its buddies\n", username);
@@ -144,11 +155,18 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 			char *content =
 				cJSON_GetObjectItem(PayloadParsed, "content")->valuestring;
 			user search;
-			search.con=con;
-			char *fromWho =
-				((user *)(hashmap_get(UsersByFD, &search)))->username;
+			search.con=*con;
+			user* usr = hashmap_get(UsersByFD, &search);
+			if(!usr){
+				return 0;
+			}
+			char* fromWho = usr->username;
 			char *where =
 				cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
+			chat wherep;
+			if(!YAMPProcessWhere(where, fromWho, &wherep)){
+				return 0;
+			}
 			chat chatCtx;
 			YAMPProcessWhere(where, fromWho, &chatCtx);
 			if (chatCtx.type == YAMP_GUILD) {
@@ -186,6 +204,21 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 		} else if (strcmp(endpoint, "GetMessageHistory") ==
 				   0) { // might use pascal case more... beware of breaking
 						// changes to other ones soon
+			user search;
+			search.con=*con;
+			
+			user* usr = hashmap_get(UsersByFD, &search);
+			if(!usr){
+				return 0;
+			}
+			char* fromWho = usr->username;
+			
+			char *where =
+				cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
+			chat wherep;
+			if(!YAMPProcessWhere(where, fromWho, &wherep)){
+				return 0;
+			}
 			cJSON *messages = GetMessageHistory(
 				cJSON_GetObjectItem(PayloadParsed, "where")->valuestring);
 			cJSON_AddItemToObject(responsebuild, "response", messages);
@@ -215,7 +248,7 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 			cJSON *targetp = cJSON_GetObjectItem(PayloadParsed, "to");
 			char *target = targetp ? targetp->valuestring : "";
 			user search;
-			search.con=con;
+			search.con=*con;
 			const user *usr = hashmap_get(UsersByFD, &search);
 			if (usr) {
 				PushFQ(target, usr->username);
@@ -225,7 +258,7 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 			if (senderp) {
 				char *sender = senderp->valuestring;
 				user search;
-				search.con = con;
+				search.con=*con;
 				const user *usr = hashmap_get(UsersByFD, &search);
 				if (usr) {
 					DestroyFriendReq(sender,usr->username);
@@ -237,7 +270,7 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 			if (senderp) {
 				char *sender = senderp->valuestring;
 				user search;
-				search.con = con;
+				search.con=*con;
 				const user *usr = hashmap_get(UsersByFD, &search);
 				if (usr) {
 					DestroyFriendReq(sender,usr->username);
@@ -252,7 +285,6 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection con) {
 	char* resp = cJSON_Print(responsebuild);
 	(*response) = resp;
 	printf("%s\n",resp);
-	free(resp);
 	cJSON_Delete(responsebuild);
 	return 1;
 }

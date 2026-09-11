@@ -151,7 +151,7 @@ int main() {
 					if (TLSYAMPRecv(client_sockets[i].ssl, &payload, &len)) {
 						printf("%s\n", payload);
 						char *response;
-						if (ProcessRequest(payload, &response, i, client_sockets[i])) {
+						if (ProcessRequest(payload, &response, i, &client_sockets[i])) {
 							TLSYAMPSend(client_sockets[i].ssl, response,
 										strlen(response));
 						}
@@ -167,7 +167,7 @@ int main() {
 					if (YAMPRecv(sd, &payload, &len)) {
 						printf("%s\n", payload);
 						char *response;
-						if (ProcessRequest(payload, &response, i, client_sockets[i])) {
+						if (ProcessRequest(payload, &response, i, &client_sockets[i])) {
 							YAMPSend(sd, response, strlen(response));
 						}
 					} else {
