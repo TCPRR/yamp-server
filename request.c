@@ -7,14 +7,12 @@
 #include "globals.h"
 #include "handlers.h"
 #include "types.h"
-int ProcessRequest(char *payload, char **response, int sockid, Connection* con) {
-	if(time(NULL)-con->LastEndpoint<1){
+int ProcessRequest(char *payload, char **response, int sockid,
+				   Connection *con) {
+	if (time(NULL) - con->LastEndpoint < 1) {
 		return 0;
-	}else{
-		con->LastEndpoint=time(NULL);
-	}
-	if(time(NULL)-con->LastRegistration<60){
-		return 0;
+	} else {
+		con->LastEndpoint = time(NULL);
 	}
 	cJSON *responsebuild = cJSON_CreateObject();
 	cJSON *PayloadParsed = cJSON_Parse(payload);
@@ -23,33 +21,33 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 			   "socketing code is faulty\n");
 		return 0;
 	}
-	cJSON* typep = cJSON_GetObjectItem(PayloadParsed, "type");
+	cJSON *typep = cJSON_GetObjectItem(PayloadParsed, "type");
 	char *type;
-	if(typep){
-		type=typep->valuestring;
-	}else{
+	if (typep) {
+		type = typep->valuestring;
+	} else {
 		return 0;
 	}
 	if (strcmp(type, "request") == 0) {
 		cJSON_AddStringToObject(responsebuild, "type", "response");
 		cJSON *reqid = cJSON_GetObjectItem(PayloadParsed, "reqid");
-		if(reqid){
-		cJSON_AddItemToObject(responsebuild, "reqid",
-							  cJSON_Duplicate(reqid, cJSON_True));
+		if (reqid) {
+			cJSON_AddItemToObject(responsebuild, "reqid",
+								  cJSON_Duplicate(reqid, cJSON_True));
 		}
-		cJSON* endpointp = cJSON_GetObjectItem(PayloadParsed, "endpoint");
-		char *endpoint =
-			endpointp->valuestring;
+		cJSON *endpointp = cJSON_GetObjectItem(PayloadParsed, "endpoint");
+		if(!endpointp){
+			return 0;
+		}
+		char *endpoint = endpointp->valuestring;
 		if (strcmp(endpoint, "login") == 0) {
-			cJSON* usernamep = cJSON_GetObjectItem(PayloadParsed, "username");
-			cJSON* passwdp = cJSON_GetObjectItem(PayloadParsed, "password");
-			if(!(usernamep && passwdp)){
+			cJSON *usernamep = cJSON_GetObjectItem(PayloadParsed, "username");
+			cJSON *passwdp = cJSON_GetObjectItem(PayloadParsed, "password");
+			if (!(usernamep && passwdp)) {
 				return 0;
 			}
-			char *username = strdup(
-				usernamep->valuestring);
-			char *passwd =
-				passwdp->valuestring;
+			char *username = strdup(usernamep->valuestring);
+			char *passwd = passwdp->valuestring;
 			char hashedPassword[65];
 			sha256_hex(passwd, hashedPassword);
 			const char *sql = "SELECT name, display_name FROM users WHERE name "
@@ -65,7 +63,7 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 				newUser->username = username;
 				newUser->displayname =
 					strdup((const char *)sqlite3_column_text(stmt, 1));
-				newUser->con=*con;
+				newUser->con = *con;
 				newUser->status = (status){"online", "", "", ""};
 				hashmap_set(UsersByFD, newUser);
 				hashmap_set(UsersByName, newUser);
@@ -129,25 +127,30 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 				cJSON_AddStringToObject(responsebuild, "response", "fail");
 			}
 			sqlite3_finalize(stmt);
-		} else if(strcmp(endpoint,"register")==0){
-			cJSON *emailp = cJSON_GetObjectItem(PayloadParsed, "email"); // for future
+		} else if (strcmp(endpoint, "register") == 0) {
+			if (time(NULL) - con->LastRegistration < 300) {
+				return 0;
+			}
+			cJSON *emailp =
+				cJSON_GetObjectItem(PayloadParsed, "email"); // for future
 			cJSON *usernamep = cJSON_GetObjectItem(PayloadParsed, "username");
 			cJSON *passwdp = cJSON_GetObjectItem(PayloadParsed, "password");
 			cJSON *resp = cJSON_CreateObject();
-			if(!(usernamep && passwdp)){
+			if (!(usernamep && passwdp)) {
 				cJSON_AddBoolToObject(responsebuild, "succeed", 0);
-			}else{
-				char* username = usernamep->valuestring;
-				char* passwd = passwdp->valuestring;
-				cJSON_AddBoolToObject(responsebuild, "succeed", RegisterUserAccount(username, passwd));
+			} else {
+				char *username = usernamep->valuestring;
+				char *passwd = passwdp->valuestring;
+				cJSON_AddBoolToObject(responsebuild, "succeed",
+									  RegisterUserAccount(username, passwd));
 			}
-			con->LastRegistration=time(NULL);
+			con->LastRegistration = time(NULL);
 			cJSON_AddItemToObject(responsebuild, "response", resp);
 		} else if (strcmp(endpoint, "buddylist") == 0) {
 			user search;
-			search.con=*con;
-			user* usr = hashmap_get(UsersByFD, &search);
-			if(!usr){
+			search.con = *con;
+			user *usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				return 0;
 			}
 			printf("%s is asking for its buddies\n", usr->username);
@@ -158,30 +161,29 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 				}
 			}
 		} else if (strcmp(endpoint, "sendim") == 0) {
-			cJSON* contentp =
-				cJSON_GetObjectItem(PayloadParsed, "content");
-			if(!contentp){
+			cJSON *contentp = cJSON_GetObjectItem(PayloadParsed, "content");
+			if (!contentp) {
 				return 0;
 			}
-			char* content = contentp->valuestring;
+			char *content = contentp->valuestring;
 			user search;
-			search.con=*con;
-			user* usr = hashmap_get(UsersByFD, &search);
-			if(!usr){
+			search.con = *con;
+			user *usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				return 0;
 			}
-			char* fromWho = usr->username;
-			cJSON* rwhere = cJSON_GetObjectItem(PayloadParsed, "where");
-			if(!rwhere){
+			char *fromWho = usr->username;
+			cJSON *rwhere = cJSON_GetObjectItem(PayloadParsed, "where");
+			if (!rwhere) {
 				return 0;
 			}
-			char *where =
-				rwhere->valuestring;
+			char *where = rwhere->valuestring;
 			chat wherep;
-			if(!YAMPProcessWhere(where, fromWho, &wherep)){
+			if (!YAMPProcessWhere(where, fromWho, &wherep)) {
 				return 0;
 			} else {
-				if(wherep.type == YAMP_GUILD && !IsInSpace(usr->username, wherep.GuildName)){
+				if (wherep.type == YAMP_GUILD &&
+					!IsInSpace(usr->username, wherep.GuildName)) {
 					return 0;
 				}
 			}
@@ -203,18 +205,17 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 			}
 		} else if (strcmp(endpoint, "getchannels") == 0) {
 			user search;
-			search.con=*con;
-			user* usr = hashmap_get(UsersByFD, &search);
-			if(!usr){
+			search.con = *con;
+			user *usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				return 0;
 			}
-			cJSON* guildp = cJSON_GetObjectItem(PayloadParsed, "space");
-			if(!guildp){
+			cJSON *guildp = cJSON_GetObjectItem(PayloadParsed, "space");
+			if (!guildp) {
 				return 0;
 			}
-			char *guild =
-				guildp->valuestring;
-			if(!IsInSpace(usr->username, guild)){
+			char *guild = guildp->valuestring;
+			if (!IsInSpace(usr->username, guild)) {
 				return 0;
 			}
 			cJSON *channels;
@@ -222,41 +223,42 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 			cJSON_AddItemToObject(responsebuild, "response", channels);
 		} else if (strcmp(endpoint, "GetUserDetails") == 0) {
 			cJSON *details;
-			cJSON *namep=cJSON_GetObjectItem(PayloadParsed, "name");
-			if(!namep){
+			cJSON *namep = cJSON_GetObjectItem(PayloadParsed, "name");
+			if (!namep) {
 				return 0;
 			}
-			CreateUserObjectFromUsername(
-				namep->valuestring,
-				&details);
+			CreateUserObjectFromUsername(namep->valuestring, &details);
 			cJSON_AddItemToObject(responsebuild, "response", details);
 		} else if (strcmp(endpoint, "GetGuildDetails") == 0) {
-			cJSON *namep=cJSON_GetObjectItem(PayloadParsed, "name");
-			if(!namep){
+			cJSON *namep = cJSON_GetObjectItem(PayloadParsed, "name");
+			if (!namep) {
 				return 0;
 			}
 			cJSON *details;
-			CreateSpaceObjectFromName(
-				namep->valuestring,
-				&details);
+			CreateSpaceObjectFromName(namep->valuestring, &details);
 			cJSON_AddItemToObject(responsebuild, "response", details);
 		} else if (strcmp(endpoint, "GetMessageHistory") ==
 				   0) { // might use pascal case more... beware of breaking
 						// changes to other ones soon
 			user search;
-			search.con=*con;
-			
-			user* usr = hashmap_get(UsersByFD, &search);
-			if(!usr){
+			search.con = *con;
+
+			user *usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				return 0;
 			}
-			char* fromWho = usr->username;
+			char *fromWho = usr->username;
 
 			char *where =
 				cJSON_GetObjectItem(PayloadParsed, "where")->valuestring;
 			chat wherep;
-			if(!YAMPProcessWhere(where, fromWho, &wherep)){
+			if (!YAMPProcessWhere(where, fromWho, &wherep)) {
 				return 0;
+			}
+			if(wherep.type==YAMP_GUILD){
+				if(!IsInSpace(usr->username, wherep.GuildName)){
+					return 0;
+				}
 			}
 			cJSON *messages = GetMessageHistory(
 				cJSON_GetObjectItem(PayloadParsed, "where")->valuestring);
@@ -287,32 +289,32 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 			cJSON *targetp = cJSON_GetObjectItem(PayloadParsed, "to");
 			char *target = targetp ? targetp->valuestring : "";
 			user search;
-			search.con=*con;
+			search.con = *con;
 			const user *usr = hashmap_get(UsersByFD, &search);
 			if (usr) {
 				PushFQ(target, usr->username);
 			}
-		} else if (strcmp(endpoint, "AcceptFriendReq")) {
+		} else if (strcmp(endpoint, "AcceptFriendReq")==0) {
 			cJSON *senderp = cJSON_GetObjectItem(PayloadParsed, "user");
 			if (senderp) {
 				char *sender = senderp->valuestring;
 				user search;
-				search.con=*con;
+				search.con = *con;
 				const user *usr = hashmap_get(UsersByFD, &search);
 				if (usr) {
-					DestroyFriendReq(sender,usr->username);
-					CreateFriendship(sender,usr->username);
+					DestroyFriendReq(sender, usr->username);
+					CreateFriendship(sender, usr->username);
 				}
 			}
-		} else if (strcmp(endpoint, "DenyFriendReq")) {
+		} else if (strcmp(endpoint, "DenyFriendReq")==0) {
 			cJSON *senderp = cJSON_GetObjectItem(PayloadParsed, "user");
 			if (senderp) {
 				char *sender = senderp->valuestring;
 				user search;
-				search.con=*con;
+				search.con = *con;
 				const user *usr = hashmap_get(UsersByFD, &search);
 				if (usr) {
-					DestroyFriendReq(sender,usr->username);
+					DestroyFriendReq(sender, usr->username);
 				}
 			}
 		}
@@ -321,9 +323,9 @@ int ProcessRequest(char *payload, char **response, int sockid, Connection* con) 
 		printf("no req november\n");
 	}
 	cJSON_Delete(PayloadParsed);
-	char* resp = cJSON_Print(responsebuild);
+	char *resp = cJSON_Print(responsebuild);
 	(*response) = resp;
-	printf("%s\n",resp);
+	printf("%s\n", resp);
 	cJSON_Delete(responsebuild);
 	return 1;
 }
