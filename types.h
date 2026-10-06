@@ -24,6 +24,7 @@ typedef struct {
 	SSL *ssl;
 	unsigned long long LastRegistration;
 	unsigned long long LastEndpoint;
+	int ratelimited;
 } Connection;
 typedef struct {
 	Connection con;

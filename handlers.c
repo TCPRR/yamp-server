@@ -22,9 +22,9 @@ cJSON *CreateUserObject(user *user) {
 	cJSON_AddItemToObject(returnObj, "status", statusObj);
 	return returnObj;
 }
-int RegisterUserAccount(char* name, char* passwd){
+int RegisterUserAccount(char *name, char *passwd) {
 	const char *sql =
-		"INSERT INTO users FROM users (name, display_name, password) VALUES (?,?,?)";
+		"INSERT INTO users (name, display_name, password) VALUES (?,?,?)";
 	sqlite3_stmt *stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	char passwdh[65];
@@ -33,7 +33,7 @@ int RegisterUserAccount(char* name, char* passwd){
 	sqlite3_bind_text(stmt, 2, name, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 3, passwdh, -1, SQLITE_STATIC);
 
-	if (sqlite3_step(stmt) == SQLITE_ROW) {
+	if (sqlite3_step(stmt) == SQLITE_DONE) {
 		sqlite3_finalize(stmt);
 		return 1;
 	} else {
@@ -53,10 +53,13 @@ int CreateSpaceObjectFromName(char *name, cJSON **output) {
 		cJSON_AddStringToObject(*output, "name", name);
 		cJSON_AddStringToObject(*output, "display_name",
 								(char *)sqlite3_column_text(stmt, 0));
+		sqlite3_finalize(stmt);
 		return 1;
 	} else {
+		sqlite3_finalize(stmt);
 		return 0;
 	}
+	sqlite3_finalize(stmt);
 
 	return 1;
 }
@@ -104,7 +107,7 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 		return 0;
 	}
 
-	sqlite3_bind_text(stmt, 0, name, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 2, name, -1, SQLITE_STATIC);
 
 	cJSON *array = cJSON_CreateArray();
@@ -120,7 +123,7 @@ int CreateFriendsListFromUsername(const char *name, cJSON **output) {
 		} else {
 			return 0;
 		}
-		cJSON* userObj;
+		cJSON *userObj;
 		if (CreateUserObjectFromUsername(friend, &userObj)) {
 			cJSON_AddItemToArray(array, userObj);
 		}
@@ -253,18 +256,19 @@ char **ListSpaceMembersNames(char *name, int *outputlen) {
 	sqlite3_finalize(stmt);
 	return ret;
 }
-int IsInSpace(char *username, char* spacename) {
-	const char *sql =
-		"SELECT \"user-name\" FROM \"user-space\" WHERE \"space-name\" = ? AND \"user-name\" = ?";
+int IsInSpace(char *username, char *spacename) {
+	const char *sql = "SELECT \"user-name\" FROM \"user-space\" WHERE "
+					  "\"space-name\" = ? AND \"user-name\" = ?";
 	sqlite3_stmt *stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, spacename, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 2, username, -1, SQLITE_STATIC);
-	if(sqlite3_step(stmt)==SQLITE_ROW){
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
 		sqlite3_finalize(stmt);
 		return 1;
 	}
 	return 0;
+	sqlite3_finalize(stmt);
 }
 cJSON *CreateMessageObject(char *author, char *content, char *where) {
 	cJSON *object = cJSON_CreateObject();
@@ -308,12 +312,12 @@ int PushEvent(Connection con, char *event, cJSON *data) {
 	cJSON_AddStringToObject(payload, "type", "event");
 	cJSON_AddStringToObject(payload, "event", event);
 	cJSON_AddItemToObject(payload, "data", data);
-	if(con.connected){
-		char* out = cJSON_Print(payload);
-		if(con.encrypt){
-		TLSYAMPSend(con.ssl, out, strlen(out));
-		}else{
-		YAMPSend(con.fd, out, strlen(out));
+	if (con.connected) {
+		char *out = cJSON_Print(payload);
+		if (con.encrypt) {
+			TLSYAMPSend(con.ssl, out, strlen(out));
+		} else {
+			YAMPSend(con.fd, out, strlen(out));
 		}
 		free(out);
 	}
@@ -343,12 +347,12 @@ int PushFQ(char *toWho, char *fromWho) {
 	const user *usr = hashmap_get(UsersByName, &search);
 	if (usr) {
 		Connection con = usr->con;
-		printf("Pushing an fq event to %s at %d\n",
-			   toWho, con.fd);
+		printf("Pushing an fq event to %s at %d\n", toWho, con.fd);
 		cJSON_AddStringToObject(payload, "from", fromWho);
 		PushEvent(con, "IncomingFriendReq", payload);
 	} else {
-		printf("a friend req was omitted due to the other side being offline!\n");
+		printf(
+			"a friend req was omitted due to the other side being offline!\n");
 	}
 }
 int PushStatusUpdate(char *toWho, char *who, status status) {
@@ -376,43 +380,49 @@ int PushStatusUpdate(char *toWho, char *who, status status) {
 }
 
 
-void CreateFriendship(char* sender, char* accepter){
-	sqlite3_stmt* stmt;
-	char* query = "INSERT INTO \"friendship\" (sender,accepter) VALUES (?,?)";
+void CreateFriendship(char *sender, char *accepter) {
+	sqlite3_stmt *stmt;
+	char *query = "INSERT INTO \"friendship\" (sender,accepter) VALUES (?,?)";
 	sqlite3_prepare_v2(DB, query, -1, &stmt, NULL);
-	sqlite3_bind_text(stmt,1,sender,-1,SQLITE_STATIC);
-	sqlite3_bind_text(stmt,2,accepter,-1,SQLITE_STATIC);
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+	sqlite3_bind_text(stmt, 1, sender, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, accepter, -1, SQLITE_STATIC);
+	int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
 }
-void DestroyFriendReq(char* sender, char* receiver){
-	sqlite3_stmt* stmt;
-	char* query = "DELETE FROM \"friendreq\" WHERE sender=? AND receiver=?";
+int DestroyFriendReq(char *sender, char *receiver) {
+	sqlite3_stmt *stmt;
+	char *query = "DELETE FROM \"friendreq\" WHERE sender=? AND receiver=?";
 	sqlite3_prepare_v2(DB, query, -1, &stmt, NULL);
-	sqlite3_bind_text(stmt,1,sender,-1,SQLITE_STATIC);
-	sqlite3_bind_text(stmt,2,receiver,-1,SQLITE_STATIC);
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+	sqlite3_bind_text(stmt, 1, sender, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, receiver, -1, SQLITE_STATIC);
+	int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	if(rc==SQLITE_DONE){
+		return 1;
+	}else{
+		return 0;
+	}
 }
-void CreateFriendReq(char* sender, char* receiver){
-	sqlite3_stmt* stmt;
-	char* query = "INSERT INTO \"friendreq\" (sender,recver) VALUES (?,?)";
+void CreateFriendReq(char *sender, char *receiver) {
+	sqlite3_stmt *stmt;
+	char *query = "INSERT INTO \"friendreq\" (sender,recver) VALUES (?,?)";
 	sqlite3_prepare_v2(DB, query, -1, &stmt, NULL);
-	sqlite3_bind_text(stmt,1,sender,-1,SQLITE_STATIC);
-	sqlite3_bind_text(stmt,2,receiver,-1,SQLITE_STATIC);
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+	sqlite3_bind_text(stmt, 1, sender, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, receiver, -1, SQLITE_STATIC);
+	int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
 }
-int ListFriendReqs(char* user, char** out){
-	sqlite3_stmt* stmt;
-	char* query = "SELECT sender, receiver FROM \"friendreq\" WHERE sender=? OR receiver=?";
+int ListFriendReqs(char *user, char ***out) {
+	sqlite3_stmt *stmt;
+	char *query = "SELECT sender, receiver FROM \"friendreq\" WHERE sender=? "
+				  "OR receiver=?";
 	sqlite3_prepare_v2(DB, query, -1, &stmt, NULL);
-	sqlite3_bind_text(stmt,1,user,-1,SQLITE_STATIC);
-	sqlite3_bind_text(stmt,2,user,-1,SQLITE_STATIC);
-	int count;
-	*out=NULL;
-	while(sqlite3_step(stmt) == SQLITE_ROW){
-		*out=realloc(*out,(count+1)*sizeof(char*));
+	sqlite3_bind_text(stmt, 1, user, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, user, -1, SQLITE_STATIC);
+	int count = 0;
+	*out = NULL;
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		*out = realloc(*out, (count + 1) * sizeof(char *));
 
 		char *p1 = sqlite3_column_text(stmt, 0);
 		char *p2 = sqlite3_column_text(stmt, 1);
@@ -425,8 +435,9 @@ int ListFriendReqs(char* user, char** out){
 			return 0;
 		}
 
-		out[count]=friend;
+		(*out)[count] = strdup(friend);
 		count++;
 	}
-    sqlite3_finalize(stmt);
+	sqlite3_finalize(stmt);
+	return count;
 }

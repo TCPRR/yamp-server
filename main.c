@@ -52,11 +52,15 @@ int main() {
 	bind(master_tls_socket, (struct sockaddr *)&tlsaddress, sizeof(address));
 	listen(master_socket, 3);
 	listen(master_tls_socket, 3);
-	SSL_CTX_use_certificate_chain_file(
-		ctx, CHAINFILE_PATH);
+	if(SSL_CTX_use_certificate_chain_file(
+		ctx, CHAINFILE_PATH) <= 0){
+			printf("Error loading the certificate chain\n");
+	}
 
-	SSL_CTX_use_PrivateKey_file(
-		ctx, PRIVKEY_PATH, SSL_FILETYPE_PEM);
+	if(SSL_CTX_use_PrivateKey_file(
+		ctx, PRIVKEY_PATH, SSL_FILETYPE_PEM) <= 0){
+			printf("Error loading the private key chain\n");
+	}
 	SSL *serverssl = SSL_new(ctx);
 	SSL_set_fd(serverssl, master_tls_socket);
 
