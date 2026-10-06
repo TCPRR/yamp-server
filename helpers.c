@@ -51,7 +51,15 @@ uint64_t hmap_username_hash(const void *item, uint64_t seed0, uint64_t seed1) {
 int hmap_username_compare(const void *a, const void *b, void *udata) {
 	return strcmp(((const user *)a)->username, ((const user *)b)->username);
 }
+uint64_t hmap_userid_hash(const void *item, uint64_t seed0, uint64_t seed1) {
+	return hashmap_sip(((user *)item)->id,
+					   strlen(((user *)item)->id), seed0, seed1);
+}
+int hmap_userid_compare(const void *a, const void *b, void *udata) {
+	return strcmp(((const user *)a)->id, ((const user *)b)->id);
+}
 void hmap_username_free(void *item) {}
+void hmap_userid_free(void *item) {}
 
 uint64_t hmap_userfd_hash(const void *item, uint64_t seed0, uint64_t seed1) {
 	int fd = ((user *)item)->con.fd;

@@ -28,9 +28,19 @@ typedef struct {
 } Connection;
 typedef struct {
 	Connection con;
+	char id[17];
 	char *username;
 	char* displayname;
 	char* description;
 	char* pfp;
 	status status;
 } user;
+typedef struct {
+	char id[17];
+	char* name;
+	char* displayname;
+	char* icon;
+	char* banner;
+	char* description;
+	int type;
+} YampSpace;
