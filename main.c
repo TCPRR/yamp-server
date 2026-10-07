@@ -21,6 +21,7 @@
 #include "request.h"
 #include "config.h"
 #include "handlers.h"
+#include "types.h"
 #define PORT 5224
 #define SSLPORT 5225
 #define MAX_CLIENTS 1024
@@ -37,17 +38,22 @@ void* UnixListener(void* args) {
 		if(r==0){
 			return NULL;
 		}
+		len=ntohl(len);
 		char* payload = malloc(len);
-		int keepreading = 1;
 		int totaln = 0;
-		while (keepreading) {
+		while (len>totaln) {
 			int n = recv(fd, payload + totaln, len - totaln, 0);
 			if (n <= 0) {
-				keepreading = 0;
+				free(payload);
+				return NULL;
 			}
 			totaln += n;
 		}
 		cJSON* payld = cJSON_Parse(payload);
+		if(!payld){
+			printf("Unintelligable payload from a plugin\n");
+			return NULL;
+		}
 		char* endpoint =
 			cJSON_GetStringValue(cJSON_GetObjectItem(payld, "endpoint"));
 		cJSON* response = cJSON_CreateObject();
@@ -65,6 +71,13 @@ void* UnixListener(void* args) {
 			} else {
 				cJSON_AddBoolToObject(response, "success", 0);
 			}
+		} else if(strcmp(endpoint,"SetMainRespOverride")==0){
+			MainRespOverride override;
+			override.key=strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "key")));
+			override.val=strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "val")));
+			printf("A main-response keypair override was set, %s is now %s\n",override.key,override.val);
+			respoverrides=realloc(respoverrides,sizeof(MainRespOverride)*(nrespoverrides+1));
+			respoverrides[nrespoverrides++]=override;
 		}
 		char* respout = cJSON_PrintUnformatted(response);
 		uint32_t rlen=strlen(respout)+1;
@@ -292,6 +305,19 @@ int main() {
 						// disconnected or tried to abuse the server
 						SSL_free(client_sockets[i].ssl);
 						close(sd);
+						user search;
+						search.con=client_sockets[i];
+						user* usr = hashmap_get(UsersByFD,&search);
+						if(usr){
+							int cnt;
+							char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
+							for(int i = 0; i<cnt; i++){
+								PushStatusUpdate(relatedpeople[i], usr->id, (status){"offline","","",""});
+							}
+							hashmap_delete(UsersByID, usr);
+							hashmap_delete(UsersByName, usr);
+							hashmap_delete(UsersByFD, usr);
+						}
 						client_sockets[i].connected = 0;
 					}
 				} else {
@@ -308,6 +334,19 @@ int main() {
 					} else {
 						// disconnected or tried to abuse the server
 						close(sd);
+						user search;
+						search.con=client_sockets[i];
+						user* usr = hashmap_get(UsersByFD,&search);
+						if(usr){
+							int cnt;
+							char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
+							for(int i = 0; i<cnt; i++){
+								PushStatusUpdate(relatedpeople[i], usr->id, (status){"offline","","",""});
+							}
+							hashmap_delete(UsersByID, usr);
+							hashmap_delete(UsersByName, usr);
+							hashmap_delete(UsersByFD, usr);
+						}
 						client_sockets[i].connected = 0;
 					}
 				}

@@ -44,3 +44,7 @@ typedef struct {
 	char* description;
 	int type;
 } YampSpace;
+typedef struct{
+	char* key;
+	char* val;
+} MainRespOverride;

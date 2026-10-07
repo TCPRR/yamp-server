@@ -593,7 +593,7 @@ cJSON* CreateMessageObject(char* author, char* content, char* where) {
 	cJSON* object = cJSON_CreateObject();
 	cJSON_AddStringToObject(object, "author", author);
 	cJSON_AddStringToObject(object, "content", content);
-	cJSON_AddStringToObject(object, "where", where);
+	cJSON_AddStringToObject(object, "channel", where);
 	return object;
 }
 void InsertMessage(char* where, char* author, char* content) {
@@ -653,7 +653,7 @@ int PushRecvIM(char* toID, char* channel, char* fromID, char* content) {
 			   toID, con.fd, content);
 		cJSON_AddStringToObject(payload, "content", content);
 		cJSON_AddStringToObject(payload, "author", fromID);
-		cJSON_AddStringToObject(payload, "where", channel);
+		cJSON_AddStringToObject(payload, "channel", channel);
 		PushEvent(con, "recvim", payload);
 	} else {
 		printf("a message was canceled due to the other side being offline!\n");

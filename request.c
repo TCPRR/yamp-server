@@ -68,11 +68,13 @@ static void FreeIDList(char** list, int n) {
 	free(list);
 }
 
-static char** CollectRelatedUserIDs(const char* username, const char* selfid,
+char** CollectRelatedUserIDs(const char* username, const char* selfid,
 									int* count) {
 	char** list = NULL;
 	*count = 0;
-	AddUniqueID(&list, count, selfid);
+	if(selfid){
+		AddUniqueID(&list, count, selfid);
+	}
 
 	cJSON* spaces = NULL;
 	CreateSpacesListFromUsername(username, &spaces);
@@ -103,13 +105,19 @@ static char** CollectRelatedUserIDs(const char* username, const char* selfid,
 }
 int ProcessRequest(char* payload, char** response, int sockid,
 				   Connection* con) {
-	cJSON* PayloadParsed = cJSON_Parse(payload);
-	if (!PayloadParsed) {
+	cJSON* WireParsed = cJSON_Parse(payload);
+	if (!WireParsed) {
 		printf("Failed parsing, probably a client error or the servers "
 			   "socketing code is faulty\n");
 		return 0;
 	}
+	cJSON* PayloadParsed = cJSON_GetObjectItem(WireParsed, "payload");
+	if(!PayloadParsed){
+		printf("Failed to find the payload, a broken client?\n");
+		return 0;
+	}
 	cJSON* responsebuild = cJSON_CreateObject();
+	cJSON* responsepayload = cJSON_CreateObject();
 	if (time(NULL) - con->LastEndpoint < 1) {
 		con->ratelimited++;
 	} else {
@@ -126,20 +134,20 @@ int ProcessRequest(char* payload, char** response, int sockid,
 	}
 	con->ratelimited--;
 	char* type =
-		cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "type"));
+		cJSON_GetStringValue(cJSON_GetObjectItem(WireParsed, "type"));
 	if (!type) {
 		InsertError(responsebuild, 3);
 		goto finishresp;
 	}
 	if (strcmp(type, "request") == 0) {
 		cJSON_AddStringToObject(responsebuild, "type", "response");
-		cJSON* reqid = cJSON_GetObjectItem(PayloadParsed, "reqid");
+		cJSON* reqid = cJSON_GetObjectItem(WireParsed, "reqid");
 		if (reqid) {
 			cJSON_AddItemToObject(responsebuild, "reqid",
 								  cJSON_Duplicate(reqid, cJSON_True));
 		}
 		char* endpoint = cJSON_GetStringValue(
-			cJSON_GetObjectItem(PayloadParsed, "endpoint"));
+			cJSON_GetObjectItem(WireParsed, "endpoint"));
 		if (!endpoint) {
 			InsertError(responsebuild, 3);
 			goto finishresp;
@@ -180,7 +188,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				int nusrlist = 0;
 				cJSON* spaces;
 				CreateSpacesListFromUsername(username, &spaces);
-				cJSON_AddItemToObject(responsebuild, "spaces", spaces);
+				cJSON_AddItemToObject(responsepayload, "spaces", spaces);
 				for (int i = 0; i < cJSON_GetArraySize(spaces); i++) {
 					cJSON* space = cJSON_GetArrayItem(spaces, i);
 					char* spaceid =
@@ -232,13 +240,13 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 				cJSON* tmp;
 				CreateUsersOwnObjectFromUsername(username, &tmp);
-				cJSON_AddItemToObject(responsebuild, "user", tmp);
+				cJSON_AddItemToObject(responsepayload, "user", tmp);
 				FriendReqEntry* fql = NULL;
 				int c = ListFriendReqs(username, &fql);
 				cJSON* incfq =
-					cJSON_AddArrayToObject(responsebuild, "incoming_fq");
+					cJSON_AddArrayToObject(responsepayload, "incoming_fq");
 				cJSON* outfq =
-					cJSON_AddArrayToObject(responsebuild, "outgoing_fq");
+					cJSON_AddArrayToObject(responsepayload, "outgoing_fq");
 				for (int i = 0; i < c; i++) {
 					cJSON* user = NULL;
 					if (CreateUserObjectFromUsername(fql[i].username, &user) &&
@@ -253,7 +261,10 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 				free(fql);
 				if (friends) {
-					cJSON_AddItemToObject(responsebuild, "friends", friends);
+					cJSON_AddItemToObject(responsepayload, "friends", friends);
+				}
+				for(int i = 0; i<nrespoverrides; i++){
+					cJSON_AddStringToObject(responsepayload, respoverrides[i].key, respoverrides[i].val);
 				}
 				InsertError(responsebuild, 0);
 			} else {
@@ -292,7 +303,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			cJSON* tmp;
 			if (usr->username) {
 				if (CreateFriendsListFromUsername(usr->username, &tmp)) {
-					cJSON_AddItemToObject(responsebuild, "response", tmp);
+					cJSON_AddItemToObject(responsepayload, "friends", tmp);
 				}
 			}
 		} else if (strcmp(endpoint, "ListSpaceMembers") == 0) {
@@ -314,11 +325,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			cJSON* tmp;
-			if (usr->username && IsInSpaceViaUserID(usr->id, space)) {
-				if (CreateFriendsListFromUsername(usr->username, &tmp)) {
-					cJSON_AddItemToObject(responsebuild, "response", tmp);
-				}
-			}
+			tmp = ListSpaceMembersFromID(usr->username);
+			cJSON_AddItemToObject(responsepayload, "space_members", tmp);
 		} else if (strcmp(endpoint, "SendMessage") == 0) {
 			char* content = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "content"));
@@ -335,7 +343,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			char* fromWho = usr->id;
 			char* where = cJSON_GetStringValue(
-				cJSON_GetObjectItem(PayloadParsed, "where"));
+				cJSON_GetObjectItem(PayloadParsed, "channel"));
 			if (!where) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
@@ -368,7 +376,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				PushRecvIM(fromWho, where, fromWho, content);
 				InsertMessage(where, fromWho, content);
 			}
-		} else if (strcmp(endpoint, "getchannels") == 0) {
+			InsertError(responsebuild,0);
+		} else if (strcmp(endpoint, "GetChannels") == 0) {
 			user search;
 			search.con = *con;
 			user* usr = hashmap_get(UsersByFD, &search);
@@ -388,7 +397,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			cJSON* channels;
 			CreateChannelsListFromName(guild, &channels);
-			cJSON_AddItemToObject(responsebuild, "response", channels);
+			cJSON_AddItemToObject(responsepayload, "channels", channels);
+			InsertError(responsebuild,0);
 		} else if (strcmp(endpoint, "GetUserDetails") == 0) {
 			cJSON* details;
 			char* name = cJSON_GetStringValue(
@@ -398,7 +408,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			CreateUserObjectFromUsername(name, &details);
-			cJSON_AddItemToObject(responsebuild, "response", details);
+			cJSON_AddItemToObject(responsepayload, "user", details);
+			InsertError(responsebuild,0);
 		} else if (strcmp(endpoint, "GetSpaceDetails") == 0) {
 			char* space = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "space"));
@@ -408,7 +419,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			cJSON* details;
 			CreateSpaceObjectFromID(space, &details);
-			cJSON_AddItemToObject(responsebuild, "response", details);
+			cJSON_AddItemToObject(responsepayload, "space", details);
+			InsertError(responsebuild,0);
 		} else if (strcmp(endpoint, "GetMessageHistory") ==
 				   0) { // might use pascal case more... beware of breaking
 						// changes to other ones soon
@@ -423,7 +435,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			char* fromWho = usr->id;
 
 			char* where = cJSON_GetStringValue(
-				cJSON_GetObjectItem(PayloadParsed, "where"));
+				cJSON_GetObjectItem(PayloadParsed, "channel"));
 			if (!where) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
@@ -440,7 +452,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 			}
 			cJSON* messages = GetMessageHistory(where);
-			cJSON_AddItemToObject(responsebuild, "response", messages);
+			cJSON_AddItemToObject(responsepayload, "messages", messages);
+			InsertError(responsebuild,0);
 		} else if (strcmp(endpoint, "RepositionChannel") == 0) {
 			char* space = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "space"));
@@ -870,7 +883,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					}
 					char* code = CreateSpaceInvite(space, uses);
 					if (code) {
-						cJSON_AddStringToObject(responsebuild, "invite_code",
+						cJSON_AddStringToObject(responsepayload, "invite_code",
 												code);
 					} else {
 						InsertError(responsebuild, 4);
@@ -950,6 +963,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 	}
 finishresp:
 	cJSON_Delete(PayloadParsed);
+	cJSON_AddItemToObject(responsebuild, "response", responsepayload);
 	char* resp = cJSON_PrintUnformatted(responsebuild);
 	(*response) = resp;
 	printf("%s\n", resp);
