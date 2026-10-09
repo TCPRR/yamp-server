@@ -13,7 +13,8 @@ cJSON *CreateUserObject(user *user);
 int CreateSpaceObjectFromName(char *name, cJSON **output);
 int CreateSpaceObjectFromID(char* id, cJSON** output);
 int CreateUserObjectFromUsername(const char *name, cJSON **output);
-int CreateFriendsListFromUsername(const char *name, cJSON **output);
+int CreateFriendsListFromUserID(const char* name, cJSON** output);
+int CreateConvListFromUserID(const char *name, cJSON **output);
 int CreateSpacesListFromID(const char* name, cJSON** output);
 int CreateSpacesListFromUsername(const char* name, cJSON** output);
 int CreateChannelsListFromName(const char *name, cJSON **output);
@@ -44,3 +45,15 @@ int PushUpdatedChannelsList(char* who, char* space_id);
 int PushNewFriend(char* who, char* user_id);
 user ParseUserObject(cJSON* rawusr);
 int UpdateUserProfile(char* id, user newprofile);
+
+
+void CreateGC(user creator, int ninitmember, user* initmembers);
+int IsGCOwner(char* uid, char* gcid);
+int IsInGC(char* uid, char* gcid);
+cJSON* ListGCMembersFromID(const char* id);
+int AddMemberToGC(char* uid, char* gcid);
+
+void CreateDM(char* starter, char* recipient);
+int HasDMs(char* starter, char* recipient);
+
+int CreateUserTypeFromID(const char* id, user* output);

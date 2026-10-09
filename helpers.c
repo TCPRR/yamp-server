@@ -20,6 +20,13 @@ gboolean YAMPProcessWhere(char *where, char *curUsername, chat *out) {
 		retval.where = dupedwhere;
 		*out = retval;
 		return TRUE;
+	} else if(*where == '&'){
+		// Group chat
+		retval.GC_ID=safewhere+1;
+		retval.OtherGuy = NULL;
+		retval.type = YAMP_GC;
+		*out = retval;
+		return TRUE;
 	} else {
 		// Could be a damn DM?
 		char *minus = strchr(safewhere, '|');

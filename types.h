@@ -2,14 +2,16 @@
 #include <openssl/ssl.h>
 #define YAMP_GUILD 1
 #define YAMP_DM 0
+#define YAMP_GC 2
 
 typedef struct {
-	char type; // 0 = DM, 1 = Guild Channel
+	char type; // 0 = DM, 1 = Space Channel
 	char *where; // to be used in the APIs
 	char *OtherGuy; // for DMs only, otherwise NULL.. CHECK AND DO NOT
 	                // DEREFERENCE THAAT!
 	char *GuildName; // Above but for guilds!
 	char *ChannelName; // same same, but differeeeent :sob:
+	char* GC_ID; // Group Chat ID
 } chat;
 typedef struct{
 	char* status;
@@ -48,3 +50,8 @@ typedef struct{
 	char* key;
 	char* val;
 } MainRespOverride;
+typedef struct{
+	int type;
+	char id[34]; // 2x the normal size + space for the pipe in order to fit DMs too
+	int npeople;
+} YampConversation;

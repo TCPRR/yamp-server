@@ -22,16 +22,12 @@
 #include "config.h"
 #include "handlers.h"
 #include "types.h"
-#define PORT 5224
-#define SSLPORT 5225
-#define MAX_CLIENTS 1024
-#define MAX_IPC_CLIENTS 1024
 Connection client_sockets[MAX_CLIENTS] = {0};
 int IPCSockets[MAX_IPC_CLIENTS] = {0};
 sqlite3* DB;
 
 void* UnixListener(void* args) {
-	int fd = (int)args;
+	long int fd = IPCSockets[(int)args];
 	while (1) {
 		uint32_t len;
 		int r = recv(fd, &len, 4, 0);
@@ -45,6 +41,7 @@ void* UnixListener(void* args) {
 			int n = recv(fd, payload + totaln, len - totaln, 0);
 			if (n <= 0) {
 				free(payload);
+				IPCSockets[(int)args]=0;
 				return NULL;
 			}
 			totaln += n;
@@ -80,10 +77,9 @@ void* UnixListener(void* args) {
 			respoverrides[nrespoverrides++]=override;
 		}
 		char* respout = cJSON_PrintUnformatted(response);
-		uint32_t rlen=strlen(respout)+1;
-		len = strlen(respout) + 1;
+		uint32_t rlen=strlen(respout);
 		send(fd, &rlen, 4, 0);
-		send(fd, respout, strlen(respout) + 1, 0);
+		send(fd, respout, strlen(respout), 0);
 		free(respout);
 		cJSON_Delete(response);
 		cJSON_Delete(payld);
@@ -126,7 +122,7 @@ void* UnixAccepter(void* args) {
 
 						pthread_t clientthread;
 						pthread_create(&clientthread, NULL, UnixListener,
-									   (void*)new_socket);
+									   (void*)i);
 						pthread_detach(clientthread);
 						break;
 					}

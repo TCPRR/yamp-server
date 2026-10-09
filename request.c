@@ -7,6 +7,9 @@
 #include <sqlite3.h>
 #include <stdio.h>
 #include <string.h>
+#include "config.h"
+#include <unistd.h>
+#include <arpa/inet.h>
 typedef struct {
 	int code;
 	const char* msg;
@@ -69,15 +72,15 @@ static void FreeIDList(char** list, int n) {
 }
 
 char** CollectRelatedUserIDs(const char* username, const char* selfid,
-									int* count) {
+							 int* count) {
 	char** list = NULL;
 	*count = 0;
-	if(selfid){
+	if (selfid) {
 		AddUniqueID(&list, count, selfid);
 	}
 
 	cJSON* spaces = NULL;
-	CreateSpacesListFromUsername(username, &spaces);
+	CreateSpacesListFromID(selfid, &spaces);
 	for (int i = 0; i < cJSON_GetArraySize(spaces); i++) {
 		cJSON* idj = cJSON_GetObjectItem(cJSON_GetArrayItem(spaces, i), "id");
 		if (!cJSON_IsString(idj))
@@ -94,7 +97,7 @@ char** CollectRelatedUserIDs(const char* username, const char* selfid,
 	cJSON_Delete(spaces);
 
 	cJSON* friends = NULL;
-	CreateFriendsListFromUsername(username, &friends);
+	CreateFriendsListFromUserID(selfid, &friends);
 	for (int i = 0; i < cJSON_GetArraySize(friends); i++) {
 		cJSON* fid = cJSON_GetObjectItem(cJSON_GetArrayItem(friends, i), "id");
 		if (cJSON_IsString(fid))
@@ -112,7 +115,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 		return 0;
 	}
 	cJSON* PayloadParsed = cJSON_GetObjectItem(WireParsed, "payload");
-	if(!PayloadParsed){
+	if (!PayloadParsed) {
 		printf("Failed to find the payload, a broken client?\n");
 		return 0;
 	}
@@ -133,8 +136,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 		goto finishresp;
 	}
 	con->ratelimited--;
-	char* type =
-		cJSON_GetStringValue(cJSON_GetObjectItem(WireParsed, "type"));
+	char* type = cJSON_GetStringValue(cJSON_GetObjectItem(WireParsed, "type"));
 	if (!type) {
 		InsertError(responsebuild, 3);
 		goto finishresp;
@@ -146,8 +148,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			cJSON_AddItemToObject(responsebuild, "reqid",
 								  cJSON_Duplicate(reqid, cJSON_True));
 		}
-		char* endpoint = cJSON_GetStringValue(
-			cJSON_GetObjectItem(WireParsed, "endpoint"));
+		char* endpoint =
+			cJSON_GetStringValue(cJSON_GetObjectItem(WireParsed, "endpoint"));
 		if (!endpoint) {
 			InsertError(responsebuild, 3);
 			goto finishresp;
@@ -217,7 +219,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					}
 				}
 				cJSON* friends;
-				CreateFriendsListFromUsername(username, &friends);
+				CreateFriendsListFromUserID(newUser->id, &friends);
 				for (int i = 0; i < cJSON_GetArraySize(friends); i++) {
 					cJSON* friend = cJSON_GetArrayItem(friends, i);
 					char* name = cJSON_GetObjectItem(friend, "id")->valuestring;
@@ -263,8 +265,14 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				if (friends) {
 					cJSON_AddItemToObject(responsepayload, "friends", friends);
 				}
-				for(int i = 0; i<nrespoverrides; i++){
-					cJSON_AddStringToObject(responsepayload, respoverrides[i].key, respoverrides[i].val);
+				cJSON* conversations;
+				if (CreateConvListFromUserID(newUser->id, &conversations)) {
+					cJSON_AddItemToObject(responsepayload, "conversations", conversations);
+				}
+				for (int i = 0; i < nrespoverrides; i++) {
+					cJSON_AddStringToObject(responsepayload,
+											respoverrides[i].key,
+											respoverrides[i].val);
 				}
 				InsertError(responsebuild, 0);
 			} else {
@@ -302,10 +310,91 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			cJSON* tmp;
 			if (usr->username) {
-				if (CreateFriendsListFromUsername(usr->username, &tmp)) {
+				if (CreateFriendsListFromUserID(usr->id, &tmp)) {
 					cJSON_AddItemToObject(responsepayload, "friends", tmp);
 				}
 			}
+		} else if(strcmp(endpoint,"ListConversations")==0){
+			user search;
+			search.con = *con;
+			user* usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			cJSON* tmp;
+			if (usr->username) {
+				if (CreateConvListFromUserID(usr->id, &tmp)) {
+					cJSON_AddItemToObject(responsepayload, "conversations", tmp);
+				}
+			}
+		} else if(strcmp(endpoint,"StartDM")==0){
+			user search;
+			search.con = *con;
+			user* usr = hashmap_get(UsersByFD,&search);
+			if(!usr){
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char* recipient = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "recipient"));
+			if(!recipient){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			if(!HasDMs(usr->id,recipient)){
+				CreateDM(usr->id,recipient);
+			}
+			InsertError(responsebuild,0);
+		} else if(strcmp(endpoint,"CreateGC")==0){
+			user search;
+			search.con = *con;
+			user* usr = hashmap_get(UsersByFD,&search);
+			if(!usr){
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			cJSON* initial_members = cJSON_GetObjectItem(PayloadParsed, "members");
+			if(!initial_members){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			user* parsed_initmem = malloc(cJSON_GetArraySize(initial_members)*sizeof(user));
+			int validusers = 0;
+			for(int i = 0; i<cJSON_GetArraySize(initial_members); i++){
+				user usr;
+				if(CreateUserTypeFromID(cJSON_GetArrayItem(initial_members, i)->valuestring,&usr)){
+					parsed_initmem[i]=usr;
+					validusers++;
+				}
+			}
+			CreateGC(*usr,validusers,parsed_initmem);
+			InsertError(responsebuild,0);
+		} else if(strcmp(endpoint,"AddMemberToGC")==0){
+			user search;
+			search.con = *con;
+			user* usr = hashmap_get(UsersByFD,&search);
+			if(!usr){
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char* userid = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "user"));
+			char* gcid = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "gc"));
+			if(!userid){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			if(!gcid){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			if(IsInGC(usr->id,gcid)){
+				AddMemberToGC(userid, gcid);
+				InsertError(responsebuild,0);
+			} else {
+				InsertError(responsebuild,2);
+			}
+		} else if(strcmp(endpoint,"RemoveFromGC")==0){
+		
 		} else if (strcmp(endpoint, "ListSpaceMembers") == 0) {
 			user search;
 			search.con = *con;
@@ -375,8 +464,18 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				PushRecvIM(chatCtx.OtherGuy, where, fromWho, content);
 				PushRecvIM(fromWho, where, fromWho, content);
 				InsertMessage(where, fromWho, content);
+			} else if (chatCtx.type == YAMP_GC){
+				int outputLen;
+				cJSON* start = ListGCMembersFromID(chatCtx.GC_ID);
+				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
+					cJSON* user = cJSON_GetArrayItem(start, i);
+					PushRecvIM(cJSON_GetObjectItem(user, "id")->valuestring,
+							   where, fromWho, content);
+				}
+				cJSON_Delete(start);
+				InsertMessage(where, fromWho, content);
 			}
-			InsertError(responsebuild,0);
+			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "GetChannels") == 0) {
 			user search;
 			search.con = *con;
@@ -398,7 +497,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			cJSON* channels;
 			CreateChannelsListFromName(guild, &channels);
 			cJSON_AddItemToObject(responsepayload, "channels", channels);
-			InsertError(responsebuild,0);
+			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "GetUserDetails") == 0) {
 			cJSON* details;
 			char* name = cJSON_GetStringValue(
@@ -409,7 +508,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			CreateUserObjectFromUsername(name, &details);
 			cJSON_AddItemToObject(responsepayload, "user", details);
-			InsertError(responsebuild,0);
+			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "GetSpaceDetails") == 0) {
 			char* space = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "space"));
@@ -420,7 +519,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			cJSON* details;
 			CreateSpaceObjectFromID(space, &details);
 			cJSON_AddItemToObject(responsepayload, "space", details);
-			InsertError(responsebuild,0);
+			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "GetMessageHistory") ==
 				   0) { // might use pascal case more... beware of breaking
 						// changes to other ones soon
@@ -451,9 +550,15 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					goto finishresp;
 				}
 			}
+			if (wherep.type == YAMP_GC) {
+				if (!IsInGC(usr->id, wherep.GC_ID)) {
+					InsertError(responsebuild, 2);
+					goto finishresp;
+				}
+			}
 			cJSON* messages = GetMessageHistory(where);
 			cJSON_AddItemToObject(responsepayload, "messages", messages);
-			InsertError(responsebuild,0);
+			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "RepositionChannel") == 0) {
 			char* space = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "space"));
@@ -615,12 +720,15 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			sqlite3_step(stmt);
 			sqlite3_finalize(stmt);
 			const char* csql = "INSERT INTO \"channels\" (\"name\", \"pos\", "
-							   "\"space\") VALUES (?, ?, ?)";
+							   "\"space\", \"id\") VALUES (?, ?, ?, ?)";
 			sqlite3_stmt* cstmt;
 			sqlite3_prepare_v2(DB, csql, -1, &cstmt, NULL);
 			sqlite3_bind_text(cstmt, 1, "general", -1, SQLITE_STATIC);
 			sqlite3_bind_int(cstmt, 2, 0);
 			sqlite3_bind_text(cstmt, 3, id, -1, SQLITE_STATIC);
+			char* channel_id;
+			GenerateID(&channel_id);
+			sqlite3_bind_text(cstmt, 4, channel_id, -1, SQLITE_STATIC);
 			sqlite3_step(cstmt);
 			sqlite3_finalize(cstmt);
 			const char* msql =
@@ -642,6 +750,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 0);
 			}
 			PushNewSpace(fromWho, id);
+			free(id);
+			free(channel_id);
 		} else if (strcmp(endpoint, "InsertChannel") == 0) {
 			user search;
 			search.con = *con;
@@ -903,12 +1013,12 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			user newusr = oldusr;
 
 			cJSON* profile = cJSON_GetObjectItem(PayloadParsed, "profile");
-			if(!profile){
-				InsertError(responsebuild,3);
+			if (!profile) {
+				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			char* name = cJSON_GetStringValue(
-				cJSON_GetObjectItem(profile, "name"));
+			char* name =
+				cJSON_GetStringValue(cJSON_GetObjectItem(profile, "name"));
 			char* displayname = cJSON_GetStringValue(
 				cJSON_GetObjectItem(profile, "display_name"));
 			char* pfp =
@@ -957,6 +1067,31 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			FreeIDList(ids, nids);
 
 			InsertError(responsebuild, 0);
+		} else if (strcmp(endpoint, "UploadFile") == 0) {
+			char id[17];
+			GenerateID((char**)&id);
+			cJSON_AddStringToObject(responsepayload, "upload_token", id);
+			for (int i = 0; i < MAX_IPC_CLIENTS; i++) {
+				cJSON* uploadwire = cJSON_CreateObject();
+				cJSON_AddStringToObject(uploadwire, "endpoint",
+										"NewUploadToken");
+				cJSON* uploadpayload = cJSON_CreateObject();
+				cJSON_AddStringToObject(uploadpayload, "token", id);
+				cJSON_AddItemToObject(uploadwire, "payload", uploadpayload);
+				char* finalpayload = cJSON_PrintUnformatted(uploadwire);
+				uint32_t len = htonl(strlen(finalpayload));
+
+				if (IPCSockets[i]) {
+					write(IPCSockets[i], &len, 4);
+					write(IPCSockets[i], finalpayload, strlen(finalpayload));
+				}
+
+				free(finalpayload);
+				cJSON_Delete(uploadwire);
+			}
+		} else {
+			// Invalid endpoint!?
+			InsertError(responsebuild, 3);
 		}
 	} else {
 		printf("no req november\n");
