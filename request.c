@@ -199,7 +199,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					int outputlen;
 					out = ListSpaceMembersFromID(spaceid);
 					for (int j = 0; j < cJSON_GetArraySize(out); j++) {
-						cJSON* user = cJSON_GetArrayItem(out, i);
+						cJSON* user = cJSON_GetArrayItem(out, j);
 						int didntMatch = 1;
 						for (int k = 0; k < nusrlist; k++) {
 							if (strcmp(cJSON_GetObjectItem(user, "id")
@@ -369,6 +369,33 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			CreateGC(*usr,validusers,parsed_initmem);
 			InsertError(responsebuild,0);
+		} else if(strcmp(endpoint,"UpdateGC")==0){
+			user search;
+			search.con = *con;
+			user* usr = hashmap_get(UsersByFD,&search);
+			if(!usr){
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char* new_name = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "name"));
+			char* gcid = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "gc"));
+			if(!new_name){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			if(!gcid){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			YampChannel gc;
+			snprintf(gc.id,17,"%s",gcid);
+			gc.name = new_name;
+			if(IsInGC(usr->id,gcid)){
+				UpdateGC(&gc);
+				InsertError(responsebuild,0);
+			} else {
+				InsertError(responsebuild,2);
+			}
 		} else if(strcmp(endpoint,"AddMemberToGC")==0){
 			user search;
 			search.con = *con;

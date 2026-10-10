@@ -48,6 +48,7 @@ int UpdateUserProfile(char* id, user newprofile);
 
 
 void CreateGC(user creator, int ninitmember, user* initmembers);
+int UpdateGC(YampChannel* conv);
 int IsGCOwner(char* uid, char* gcid);
 int IsInGC(char* uid, char* gcid);
 cJSON* ListGCMembersFromID(const char* id);

@@ -50,8 +50,12 @@ typedef struct{
 	char* key;
 	char* val;
 } MainRespOverride;
-typedef struct{
+typedef struct YampChannel {
 	int type;
-	char id[34]; // 2x the normal size + space for the pipe in order to fit DMs too
+	char id[16+1+16+1];
+	char* name;
+	struct YampChannel* children;
+	int nchildren;
+	int pos;
 	int npeople;
-} YampConversation;
+} YampChannel;

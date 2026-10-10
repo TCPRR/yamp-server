@@ -440,8 +440,8 @@ int CreateFriendsListFromUserID(const char* id, cJSON** output) {
 	*output = array;
 	return 1;
 }
-static cJSON* CreatePeopleArray(cJSON* obj, const user* people, int n) {
-	cJSON* arr = cJSON_AddArrayToObject(obj, "people");
+static cJSON* CreateMembersArray(cJSON* obj, const user* people, int n) {
+	cJSON* arr = cJSON_AddArrayToObject(obj, "members");
 	if (!arr)
 		return NULL;
 
@@ -455,7 +455,7 @@ static cJSON* CreatePeopleArray(cJSON* obj, const user* people, int n) {
 	return arr;
 }
 
-cJSON* CreateConvObject(const YampConversation* conv) {
+cJSON* CreateConvObject(const YampChannel* conv) {
 	const user* people = (const user*)(conv + 1);
 	char addr_id[2 * 16 + 2];
 	int n;
@@ -490,7 +490,7 @@ cJSON* CreateConvObject(const YampConversation* conv) {
 
 	if (!cJSON_AddStringToObject(obj, "id", addr_id) ||
 		!cJSON_AddNumberToObject(obj, "type", conv->type) ||
-		!CreatePeopleArray(obj, people, n)) {
+		!CreateMembersArray(obj, people, n)) {
 		cJSON_Delete(obj);
 		return NULL;
 	}
@@ -509,7 +509,7 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 		return 0;
 
 	sqlite3_stmt *st = NULL, *ms = NULL;
-	YampConversation* conv = NULL;
+	YampChannel* conv = NULL;
 	int rc;
 
 	// dms always have 2 people so we can just use that fixed
@@ -576,7 +576,7 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 
 			if ((size_t)n == cap) {
 				cap *= 2;
-				YampConversation* grown =
+				YampChannel* grown =
 					realloc(conv, sizeof *conv + cap * sizeof(user));
 				if (!grown)
 					goto fail;
@@ -878,6 +878,23 @@ void CreateGC(user creator, int ninitmember, user* initmembers) {
 	// free(initialname);
 	free(id);
 }
+int UpdateGC(YampChannel* conv) {
+	if (!conv)
+		return 0;
+
+	const char* sql = "UPDATE \"gc\" SET \"name\" = ? WHERE \"id\" = ?";
+	sqlite3_stmt* stmt;
+
+	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK)
+		return 0;
+
+	sqlite3_bind_text(stmt, 1, conv->name, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, conv->id, -1, SQLITE_STATIC);
+
+	int ok = sqlite3_step(stmt) == SQLITE_DONE;
+	sqlite3_finalize(stmt);
+	return ok;
+}
 int IsGCOwner(char* uid, char* gcid) {
 	const char* sql = "SELECT \"owner\" FROM \"gc\" WHERE \"id\" = ?";
 	sqlite3_stmt* stmt;
@@ -1057,8 +1074,8 @@ int PushNewSpace(char* who, char* space_id) {
 		if (!ok) {
 			return 0;
 		}
-		return 1;
 		PushEvent(con, "NewSpace", body);
+		return 1;
 	}
 	return 0;
 }
@@ -1091,8 +1108,24 @@ int PushNewFriend(char* who, char* user_id) {
 		if (!ok) {
 			return 0;
 		}
-		return 1;
 		PushEvent(con, "NewFriend", body);
+		return 1;
+	}
+	return 0;
+}
+int PushNewConversation(char* userid, YampChannel conv) {
+	user search;
+	strcpy(search.id, userid);
+	const user* usr = hashmap_get(UsersByID, &search);
+	if (usr) {
+		Connection con = usr->con;
+		cJSON* body;
+		int ok = CreateUserObjectFromID(userid, &body);
+		if (!ok) {
+			return 0;
+		}
+		PushEvent(con, "NewConversation", body);
+		return 1;
 	}
 	return 0;
 }
