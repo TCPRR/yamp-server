@@ -1,3 +1,4 @@
+#pragma once
 #include <cjson/cJSON.h>
 #include "types.h"
 #include "globals.h"
@@ -8,6 +9,7 @@ typedef struct {
 } FriendReqEntry;
 
 int GenerateID(char** id);
+int GenerateID_Inline(char* id);
 int RegisterUserAccount(char* name, char* passwd);
 cJSON *CreateUserObject(user *user);
 int CreateSpaceObjectFromName(char *name, cJSON **output);
@@ -22,11 +24,12 @@ int CreateUsersOwnObjectFromUsername(char *name, cJSON **output);
 char* CreateSpaceInvite(const char* space, int uses);
 cJSON* GetSpaceDetailsFromInvite(const char* invite);
 cJSON* ListSpaceMembersFromID(char* id);
-cJSON* CreateMessageObject(char* author, char* content, char* where);
-void InsertMessage(char *where, char *author, char *content);
+int ListSpaceMembersTypeFromID(char* id, user** out);
+cJSON* CreateMessageObject(YampMessage* msg);
+void InsertMessage(YampMessage* msg);
 cJSON* GetMessageHistory(char* where);
 int PushEvent(Connection con, char *event, cJSON *data);
-int PushRecvIM(char *toWho, char *where, char *fromWho, char *content);
+int PushRecvIM(char* toID, char* channel, YampMessage* msg, int nonce);
 int PushStatusUpdate(char *toWho, char *who, status status);
 int PushFQ(char *toWho, char *fromWho);
 int PushProfileUpdate(char* toID, char* fromID);
@@ -46,15 +49,22 @@ int PushNewFriend(char* who, char* user_id);
 user ParseUserObject(cJSON* rawusr);
 int UpdateUserProfile(char* id, user newprofile);
 
+int PushNewConversation(char* userid, YampChannel conv);
 
 void CreateGC(user creator, int ninitmember, user* initmembers);
 int UpdateGC(YampChannel* conv);
 int IsGCOwner(char* uid, char* gcid);
 int IsInGC(char* uid, char* gcid);
 cJSON* ListGCMembersFromID(const char* id);
+int ListGCMembersTypeFromID(char* id, user** out);
 int AddMemberToGC(char* uid, char* gcid);
 
-void CreateDM(char* starter, char* recipient);
+YampChannel CreateDM(char* starter, char* recipient);
 int HasDMs(char* starter, char* recipient);
 
 int CreateUserTypeFromID(const char* id, user* output);
+
+
+int PushJoinChannel(char* toID, char* fromID, char* channel);
+int PushLeftChannel(char* toID, char* fromID, char* channel);
+int PushTyping(char* toID, char* fromID, char* channel);

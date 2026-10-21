@@ -1,2 +1,2 @@
-yampd:
+yampd: main.c request.c handlers.c globals.c
 	gcc -g -O0 -fno-omit-frame-pointer -fsanitize=address,undefined -I/usr/include/glib-2.0 -I/usr/lib64/glib-2.0/include -I/usr/include/sysprof-6 -pthread *.c hmap/*.c -lcjson -lsqlite3 -lcrypto -lssl -lglib-2.0 -o yampd

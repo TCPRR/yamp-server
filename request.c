@@ -238,7 +238,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					}
 				}
 				for (int i = 0; i < nusrlist; i++) {
-					PushStatusUpdate(usrlist[i], username, newUser->status);
+					PushStatusUpdate(usrlist[i], newUser->id, newUser->status);
 				}
 				cJSON* tmp;
 				CreateUsersOwnObjectFromUsername(username, &tmp);
@@ -342,7 +342,9 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			if(!HasDMs(usr->id,recipient)){
-				CreateDM(usr->id,recipient);
+				YampChannel ch = CreateDM(usr->id,recipient);
+				PushNewConversation(usr->id,ch);
+				PushNewConversation(recipient,ch);
 			}
 			InsertError(responsebuild,0);
 		} else if(strcmp(endpoint,"CreateGC")==0){
@@ -460,6 +462,10 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			char* fromWho = usr->id;
 			char* where = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "channel"));
+			char* reply = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "reply_id"));
+			int nonce = cJSON_GetNumberValue(
+				cJSON_GetObjectItem(PayloadParsed, "nonce"));
 			if (!where) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
@@ -469,7 +475,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 2);
 				goto finishresp;
 			} else {
-				if (wherep.type == YAMP_GUILD &&
+				if (wherep.type == YAMP_SPACE_TEXT &&
 					!IsInSpaceViaUserID(usr->id, wherep.GuildName)) {
 					InsertError(responsebuild, 2);
 					goto finishresp;
@@ -477,30 +483,76 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			chat chatCtx;
 			YAMPProcessWhere(where, fromWho, &chatCtx);
-			if (chatCtx.type == YAMP_GUILD) {
+			if (chatCtx.type >= 40) { // Dirty check for space channels
+				YampMessage msg = {0};
+				strcpy(msg.channel,where);
+				strcpy(msg.author,fromWho);
+				msg.timestamp = time(NULL);
+				msg.type = 0;
+				msg.content = content;
+				// InsertMessage only cares about the ID, and only thats saved to the db
+				// so rather than resolving the ID just make a fake object, I should verify the reply ID soon, or maybe in SQL relations
+				if(reply){
+					msg.reply = malloc(sizeof(YampMessage));
+					strncpy(msg.reply->id,reply,17);
+				}
+				GenerateID_Inline(msg.id);
+
 				int outputLen;
 				cJSON* start = ListSpaceMembersFromID(chatCtx.GuildName);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
 					cJSON* user = cJSON_GetArrayItem(start, i);
 					PushRecvIM(cJSON_GetObjectItem(user, "id")->valuestring,
-							   where, fromWho, content);
+							   where, &msg, nonce);
 				}
 				cJSON_Delete(start);
-				InsertMessage(where, fromWho, content);
+
+				InsertMessage(&msg);
+				free(msg.reply); // NULL free is no-op so do not check that
 			} else if (chatCtx.type == YAMP_DM) {
-				PushRecvIM(chatCtx.OtherGuy, where, fromWho, content);
-				PushRecvIM(fromWho, where, fromWho, content);
-				InsertMessage(where, fromWho, content);
+				YampMessage msg = {0};
+				strcpy(msg.channel,where);
+				strcpy(msg.author,fromWho);
+				msg.timestamp = time(NULL);
+				msg.type = 0;
+				msg.content = content;
+				// InsertMessage only cares about the ID, and only thats saved to the db
+				// so rather than resolving the ID just make a fake object, I should verify the reply ID soon, or maybe in SQL relations
+				if(reply){
+					msg.reply = malloc(sizeof(YampMessage));
+					strncpy(msg.reply->id,reply,17);
+				}
+				GenerateID_Inline(msg.id);
+				PushRecvIM(chatCtx.OtherGuy, where, &msg, nonce);
+				PushRecvIM(fromWho, where, &msg, nonce);
+				InsertMessage(&msg);
+				free(msg.reply); // NULL free is no-op so do not check that
 			} else if (chatCtx.type == YAMP_GC){
+				YampMessage msg = {0};
+				strcpy(msg.channel,where);
+				strcpy(msg.author,fromWho);
+				msg.timestamp = time(NULL);
+				msg.type = 0;
+				msg.content = content;
+				// InsertMessage only cares about the ID, and only thats saved to the db
+				// so rather than resolving the ID just make a fake object, I should verify the reply ID soon, or maybe in SQL relations
+				if(reply){
+					msg.reply = malloc(sizeof(YampMessage));
+					strncpy(msg.reply->id,reply,17);
+				}
+				GenerateID_Inline(msg.id);
+
 				int outputLen;
 				cJSON* start = ListGCMembersFromID(chatCtx.GC_ID);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
 					cJSON* user = cJSON_GetArrayItem(start, i);
 					PushRecvIM(cJSON_GetObjectItem(user, "id")->valuestring,
-							   where, fromWho, content);
+							   where, &msg, nonce);
 				}
 				cJSON_Delete(start);
-				InsertMessage(where, fromWho, content);
+
+				InsertMessage(&msg);
+				free(msg.reply); // NULL free is no-op so do not check that
 			}
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "GetChannels") == 0) {
@@ -571,7 +623,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 2);
 				goto finishresp;
 			}
-			if (wherep.type == YAMP_GUILD) {
+			if (wherep.type == YAMP_SPACE_TEXT) {
 				if (!IsInSpaceViaUserID(usr->id, wherep.GuildName)) {
 					InsertError(responsebuild, 2);
 					goto finishresp;
@@ -821,7 +873,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			if (parent) {
 				const char* parent_check_sql =
 					"SELECT 1 FROM \"channels\" "
-					"WHERE \"space\" = ? AND \"name\" = ? LIMIT 1";
+					"WHERE \"space\" = ? AND \"id\" = ? LIMIT 1";
 
 				if (sqlite3_prepare_v2(DB, parent_check_sql, -1, &stmt, NULL) !=
 					SQLITE_OK) {
@@ -1115,6 +1167,114 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 				free(finalpayload);
 				cJSON_Delete(uploadwire);
+			}
+		} else if(strcmp(endpoint,"JoinChannel")==0){
+			user search = {0};
+			search.con = *con;
+			user* found = hashmap_get(UsersByFD, &search);
+			if (!found) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char* channel = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "channel"));
+			if(!channel){
+				InsertError(responsebuild,3);
+				goto finishresp;
+			}
+			chat parsedchat;
+			YAMPProcessWhere(channel, found->id, &parsedchat); // TODO do not use "curUsername" but rather "curID", same for "where"
+			if(parsedchat.type>=40){
+				user* members = NULL;
+				int nmembers = ListSpaceMembersTypeFromID(parsedchat.GuildName,&members); // TODO fix that outdated field name to say SpaceID
+				for(int i = 0; i<nmembers; i++){
+					PushJoinChannel(members[i].id,found->id,channel);
+					FreeUserFields(&members[i]);
+				}
+				free(members);
+			} else if(parsedchat.type==YAMP_GC){
+				user* members = NULL;
+				int nmembers = ListGCMembersTypeFromID(parsedchat.GC_ID,&members);
+				for(int i = 0; i<nmembers; i++){
+					PushJoinChannel(members->id,found->id,channel);
+					FreeUserFields(&members[i]);
+				}
+				free(members);
+			} else if(parsedchat.type==YAMP_DM){
+				PushJoinChannel(parsedchat.OtherGuy,found->id,channel);
+			}
+		} else if(strcmp(endpoint,"LeaveChannel")==0){
+			user search = {0};
+			search.con = *con;
+			user* found = hashmap_get(UsersByFD, &search);
+			if (!found) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char* channel = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "channel"));
+			if(!channel){
+				InsertError(responsebuild,3);
+				goto finishresp;
+			}
+			chat parsedchat;
+			YAMPProcessWhere(channel, found->id, &parsedchat); // TODO do not use "curUsername" but rather "curID", same for "where"
+			if(parsedchat.type>=40){
+				user* members = NULL;
+				int nmembers = ListSpaceMembersTypeFromID(parsedchat.GuildName,&members); // TODO fix that outdated field name to say SpaceID
+				for(int i = 0; i<nmembers; i++){
+					PushLeftChannel(members[i].id,found->id,channel);
+					FreeUserFields(&members[i]);
+				}
+				free(members);
+			} else if(parsedchat.type==YAMP_GC){
+				user* members = NULL;
+				int nmembers = ListGCMembersTypeFromID(parsedchat.GC_ID,&members);
+				for(int i = 0; i<nmembers; i++){
+					PushLeftChannel(members->id,found->id,channel);
+					FreeUserFields(&members[i]);
+				}
+				free(members);
+			} else if(parsedchat.type==YAMP_DM){
+				PushLeftChannel(parsedchat.OtherGuy,found->id,channel);
+			}
+		} else if(strcmp(endpoint,"Typing")==0){
+			user search = {0};
+			search.con = *con;
+			user* found = hashmap_get(UsersByFD, &search);
+			if (!found) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char* channel = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "channel"));
+			if(!channel){
+				InsertError(responsebuild,3);
+				goto finishresp;
+			}
+			chat parsedchat;
+			YAMPProcessWhere(channel, found->id, &parsedchat); // TODO do not use "curUsername" but rather "curID", same for "where"
+			if(parsedchat.type>=40){
+				user* members = NULL;
+				int nmembers = ListSpaceMembersTypeFromID(parsedchat.GuildName,&members); // TODO fix that outdated field name to say SpaceID
+				for(int i = 0; i<nmembers; i++){
+					if(strcmp(members[i].id,found->id)==0){
+						continue;
+					}
+					PushTyping(members[i].id,found->id,channel);
+					FreeUserFields(&members[i]);
+				}
+				free(members);
+			} else if(parsedchat.type==YAMP_GC){
+				user* members = NULL;
+				int nmembers = ListGCMembersTypeFromID(parsedchat.GC_ID,&members);
+				for(int i = 0; i<nmembers; i++){
+					if(strcmp(members[i].id,found->id)==0){
+						continue;
+					}
+					PushTyping(members[i].id,found->id,channel);
+					FreeUserFields(&members[i]);
+				}
+				free(members);
+			} else if(parsedchat.type==YAMP_DM){
+				PushTyping(parsedchat.OtherGuy,found->id,channel);
 			}
 		} else {
 			// Invalid endpoint!?

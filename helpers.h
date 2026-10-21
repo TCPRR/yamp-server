@@ -1,3 +1,4 @@
+#pragma once
 #include "glib.h"
 #include "types.h"
 gboolean YAMPProcessWhere(char *where, char *curUsername, chat *out);
@@ -11,3 +12,6 @@ uint64_t hmap_userfd_hash(const void *item, uint64_t seed0, uint64_t seed1);
 int hmap_userfd_compare(const void *a, const void *b, void *udata);
 void hmap_userfd_free(void *item);
 void sha256_hex(const char *input, char *output_hex);
+
+char* dup0(const char* s);
+void FreeUserFields(user* u);

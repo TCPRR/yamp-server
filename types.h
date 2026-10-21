@@ -1,9 +1,12 @@
 #pragma once
 #include <openssl/ssl.h>
-#define YAMP_GUILD 1
 #define YAMP_DM 0
-#define YAMP_GC 2
-
+#define YAMP_GC 1
+#define YAMP_SPACE_TEXT 40
+#define YAMP_SPACE_CATEGORY 41
+#define YAMP_SPACE_ANNOUNCEMENT 42
+#define YAMP_SPACE_INDEX 43
+// TODO: finish deprecating the type chat for the type YampChannel EVERYWHERE
 typedef struct {
 	char type; // 0 = DM, 1 = Space Channel
 	char *where; // to be used in the APIs
@@ -36,6 +39,8 @@ typedef struct {
 	char* description;
 	char* pfp;
 	status status;
+	int isTyping;
+	char typingAt[34];
 } user;
 typedef struct {
 	char id[17];
@@ -52,10 +57,21 @@ typedef struct{
 } MainRespOverride;
 typedef struct YampChannel {
 	int type;
-	char id[16+1+16+1];
+	char id[16+1+16+1]; // DM channel IDs are the maximum this field can get, which totals up to 34 (w/ null terminator included)
 	char* name;
 	struct YampChannel* children;
 	int nchildren;
 	int pos;
 	int npeople;
+	char space[17];
+	char parent[17];
 } YampChannel;
+typedef struct YampMessage {
+	char id[16+1];
+	char author[16+1];
+	int type; // for later use
+	uint64_t timestamp;
+	char channel[16+1+16+1];
+	char* content;
+	struct YampMessage* reply;
+} YampMessage;
