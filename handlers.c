@@ -212,7 +212,6 @@ char* RegisterUserAccount(char* email, char* name, char* passwd) {
 	int ok = sqlite3_step(stmt) == SQLITE_DONE;
 
 	sqlite3_finalize(stmt);
-	free(id);
 
 	return ok ? id : 0;
 }
