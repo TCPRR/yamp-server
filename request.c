@@ -1031,6 +1031,10 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 			int type =
 				typeitem && cJSON_IsNumber(typeitem) ? typeitem->valueint : 0;
+			if(type<40){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
 
 			char* parent = NULL;
 			if (parentitem && cJSON_IsString(parentitem) &&
