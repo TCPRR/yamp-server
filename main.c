@@ -31,30 +31,32 @@ void* UnixListener(void* args) {
 	while (1) {
 		uint32_t len;
 		int r = recv(fd, &len, 4, 0);
-		if(r==0){
+		if (r == 0) {
 			return NULL;
 		}
-		len=ntohl(len);
+		len = ntohl(len);
 		char* payload = malloc(len);
 		int totaln = 0;
-		while (len>totaln) {
+		while (len > totaln) {
 			int n = recv(fd, payload + totaln, len - totaln, 0);
 			if (n <= 0) {
 				free(payload);
-				IPCSockets[(int)args]=0;
+				IPCSockets[(int)args] = 0;
 				return NULL;
 			}
 			totaln += n;
 		}
 		cJSON* payld = cJSON_Parse(payload);
-		if(!payld){
+		if (!payld) {
 			printf("Unintelligable payload from a plugin\n");
 			return NULL;
 		}
 		char* endpoint =
 			cJSON_GetStringValue(cJSON_GetObjectItem(payld, "endpoint"));
 		cJSON* response = cJSON_CreateObject();
-		cJSON_AddItemToObject(response, "reqid", cJSON_Duplicate(cJSON_GetObjectItem(payld, "reqid"), 1));
+		cJSON_AddItemToObject(
+			response, "reqid",
+			cJSON_Duplicate(cJSON_GetObjectItem(payld, "reqid"), 1));
 		if (strcmp(endpoint, "GetSpaceFromInvite") == 0) {
 
 		} else if (strcmp(endpoint, "GetSpaceDetails") == 0) {
@@ -68,16 +70,20 @@ void* UnixListener(void* args) {
 			} else {
 				cJSON_AddBoolToObject(response, "success", 0);
 			}
-		} else if(strcmp(endpoint,"SetMainRespOverride")==0){
+		} else if (strcmp(endpoint, "SetMainRespOverride") == 0) {
 			MainRespOverride override;
-			override.key=strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "key")));
-			override.val=strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "val")));
-			printf("A main-response keypair override was set, %s is now %s\n",override.key,override.val);
-			respoverrides=realloc(respoverrides,sizeof(MainRespOverride)*(nrespoverrides+1));
-			respoverrides[nrespoverrides++]=override;
+			override.key =
+				strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "key")));
+			override.val =
+				strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "val")));
+			printf("A main-response keypair override was set, %s is now %s\n",
+				   override.key, override.val);
+			respoverrides = realloc(respoverrides, sizeof(MainRespOverride) *
+													   (nrespoverrides + 1));
+			respoverrides[nrespoverrides++] = override;
 		}
 		char* respout = cJSON_PrintUnformatted(response);
-		uint32_t rlen=strlen(respout);
+		uint32_t rlen = strlen(respout);
 		send(fd, &rlen, 4, 0);
 		send(fd, respout, strlen(respout), 0);
 		free(respout);
@@ -151,10 +157,54 @@ int main() {
 	UsersByName = hashmap_new(sizeof(user), 256, 0, 0, hmap_username_hash,
 							  hmap_username_compare, hmap_username_free, NULL);
 	UsersByID = hashmap_new(sizeof(user), 256, 0, 0, hmap_userid_hash,
-							  hmap_userid_compare, hmap_userid_free, NULL);
+							hmap_userid_compare, hmap_userid_free, NULL);
 	UsersByFD = hashmap_new(sizeof(user), 256, 0, 0, hmap_userfd_hash,
 							hmap_userfd_compare, hmap_userfd_free, NULL);
+
 	sqlite3_open("yamp.db", &DB);
+	int db_init_fd = open("yamp.db.sql", O_RDONLY);
+	if (db_init_fd == -1) {
+		perror("open yamp.db.sql");
+		return -1;
+	}
+
+	struct stat init_stat;
+	if (fstat(db_init_fd, &init_stat) == -1 || init_stat.st_size < 0) {
+		perror("fstat yamp.db.sql");
+		close(db_init_fd);
+		return -1;
+	}
+
+	char* db_init_sql = malloc((size_t)init_stat.st_size + 1);
+	if (!db_init_sql) {
+		close(db_init_fd);
+		return -1;
+	}
+
+	size_t total = 0;
+	while (total < (size_t)init_stat.st_size) {
+		ssize_t n = read(db_init_fd, db_init_sql + total,
+						 (size_t)init_stat.st_size - total);
+		if (n <= 0) {
+			perror("read yamp.db.sql");
+			free(db_init_sql);
+			close(db_init_fd);
+			return -1;
+		}
+		total += (size_t)n;
+	}
+
+	db_init_sql[total] = '\0';
+	close(db_init_fd);
+	char* err = NULL;
+
+	if (sqlite3_exec(DB, db_init_sql, NULL, NULL, &err) != SQLITE_OK) {
+		fprintf(stderr, "Database initialization failed! %s\n", err);
+		sqlite3_free(err);
+		sqlite3_exec(DB, "ROLLBACK;", NULL, NULL, NULL);
+	}
+
+	free(db_init_sql);
 
 	int master_socket;
 	int master_tls_socket;
@@ -192,13 +242,15 @@ int main() {
 	memset(&unixaddress, 0, sizeof(unixaddress));
 	unlink("/tmp/yamp-server.sock");
 	unixaddress.sun_family = AF_UNIX;
-	strncpy(unixaddress.sun_path, "/tmp/yamp-server.sock", sizeof(unixaddress.sun_path) - 1);
+	strncpy(unixaddress.sun_path, "/tmp/yamp-server.sock",
+			sizeof(unixaddress.sun_path) - 1);
 
 	int unix_fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	bind(unix_fd, (struct sockaddr*)&unixaddress, sizeof(unixaddress));
 	listen(unix_fd, 3);
 	pthread_t unixacthread;
-	if (pthread_create(&unixacthread, NULL, UnixAccepter, (void*)unix_fd)==0) {
+	if (pthread_create(&unixacthread, NULL, UnixAccepter, (void*)unix_fd) ==
+		0) {
 		printf("unix IPC listening\n");
 	}
 
@@ -302,13 +354,16 @@ int main() {
 						SSL_free(client_sockets[i].ssl);
 						close(sd);
 						user search;
-						search.con=client_sockets[i];
-						user* usr = hashmap_get(UsersByFD,&search);
-						if(usr){
+						search.con = client_sockets[i];
+						user* usr = hashmap_get(UsersByFD, &search);
+						if (usr) {
 							int cnt;
-							char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
-							for(int i = 0; i<cnt; i++){
-								PushStatusUpdate(relatedpeople[i], usr->id, (status){"offline","","",""});
+							char** relatedpeople = CollectRelatedUserIDs(
+								usr->username, NULL, &cnt);
+							for (int i = 0; i < cnt; i++) {
+								PushStatusUpdate(
+									relatedpeople[i], usr->id,
+									(status){"offline", "", "", ""});
 							}
 							hashmap_delete(UsersByID, usr);
 							hashmap_delete(UsersByName, usr);
@@ -331,13 +386,16 @@ int main() {
 						// disconnected or tried to abuse the server
 						close(sd);
 						user search;
-						search.con=client_sockets[i];
-						user* usr = hashmap_get(UsersByFD,&search);
-						if(usr){
+						search.con = client_sockets[i];
+						user* usr = hashmap_get(UsersByFD, &search);
+						if (usr) {
 							int cnt;
-							char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
-							for(int i = 0; i<cnt; i++){
-								PushStatusUpdate(relatedpeople[i], usr->id, (status){"offline","","",""});
+							char** relatedpeople = CollectRelatedUserIDs(
+								usr->username, NULL, &cnt);
+							for (int i = 0; i < cnt; i++) {
+								PushStatusUpdate(
+									relatedpeople[i], usr->id,
+									(status){"offline", "", "", ""});
 							}
 							hashmap_delete(UsersByID, usr);
 							hashmap_delete(UsersByName, usr);

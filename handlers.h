@@ -10,7 +10,8 @@ typedef struct {
 
 int GenerateID(char** id);
 int GenerateID_Inline(char* id);
-int RegisterUserAccount(char* name, char* passwd);
+int GenerateToken_Inline(char* id);
+char* RegisterUserAccount(char* email, char* name, char* passwd);
 cJSON *CreateUserObject(user *user);
 int CreateSpaceObjectFromName(char *name, cJSON **output);
 int CreateSpaceObjectFromID(char* id, cJSON** output);
@@ -27,6 +28,7 @@ cJSON* ListSpaceMembersFromID(char* id);
 int ListSpaceMembersTypeFromID(char* id, user** out);
 cJSON* CreateMessageObject(YampMessage* msg);
 void InsertMessage(YampMessage* msg);
+cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit);
 cJSON* GetMessageHistory(char* where);
 int PushEvent(Connection con, char *event, cJSON *data);
 int PushRecvIM(char* toID, char* channel, YampMessage* msg, int nonce);
@@ -41,8 +43,8 @@ int IsInSpaceViaUserID(char* userid, char* spaceid);
 int AreFriends(const char* user1, const char* user2);
 int IsUserNameExisting(const char* user);
 int IsSpaceNameExisting(const char* space);
-const char* GetSpaceIDFromName(char* name);
-const char* GetUserIDFromName(char* name);
+char* GetSpaceIDFromName(char* name);
+char* GetUserIDFromName(char* name);
 int PushNewSpace(char* who, char* space_id);
 int PushUpdatedChannelsList(char* who, char* space_id);
 int PushNewFriend(char* who, char* user_id);
@@ -63,8 +65,18 @@ YampChannel CreateDM(char* starter, char* recipient);
 int HasDMs(char* starter, char* recipient);
 
 int CreateUserTypeFromID(const char* id, user* output);
+int CreateUsersOwnObjectFromID(char* name, cJSON** output);
 
 
 int PushJoinChannel(char* toID, char* fromID, char* channel);
 int PushLeftChannel(char* toID, char* fromID, char* channel);
 int PushTyping(char* toID, char* fromID, char* channel);
+
+YampMessage* CreateMessageTypeFromID(char* id);
+int DeleteMessage(char* id);
+void FreeMessageObject(YampMessage* msg);
+int PushMessageDeleted(char* toID, char* message);
+
+int CanAccessChat(const user* usr, char* id);
+
+char* GetSpaceFromChannelID(char* channel_id);

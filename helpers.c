@@ -8,48 +8,40 @@
 #include "globals.h"
 #include "handlers.h"
 
-gboolean YAMPProcessWhere(char *where, char *curUsername, chat *out) {
-	char *dupedwhere = strdup(where);
-	char *safewhere = strdup(where);
+int YAMPProcessWhere(char* where, char* curUserID, chat* out) {
 	chat retval = {0};
-	if (*where == '^') {
-		// GUILD PROBABLY
-		char *hashtag = strchr(safewhere, '#');
-		if (!hashtag) {
-			return FALSE;
-		}
-		*hashtag = '\0';
-		retval.GuildName = safewhere + 1;
-		retval.ChannelName = hashtag + 1;
-		retval.OtherGuy = NULL;
-		retval.type = YAMP_SPACE_TEXT;
-		retval.where = dupedwhere;
-		*out = retval;
-		return TRUE;
-	} else if(*where == '&'){
+	if (*where == '&') {
 		// Group chat
-		retval.GC_ID=safewhere+1;
+		retval.GC_ID = strdup(where + 1);
 		retval.OtherGuy = NULL;
 		retval.type = YAMP_GC;
+		retval.where = strdup(where);
 		*out = retval;
 		return TRUE;
 	} else {
 		// Could be a damn DM?
-		char *minus = strchr(safewhere, '|');
+		char* firstUsr = strdup(where);
+		char* minus = strchr(firstUsr, '|');
 		if (!minus) {
-			return FALSE; // nah it wasnt anything LMFAO
+			// This means it's a space channel!
+			free(firstUsr);
+			retval.GuildName = NULL; // long deprecated sorry
+			retval.ChannelName = strdup(where);
+			retval.OtherGuy = NULL;
+			retval.type = YAMP_SPACE_TEXT;
+			retval.where = strdup(where);
+			*out = retval;
+			return TRUE;
 		}
 		*minus = '\0';
 		retval.ChannelName = NULL;
 		retval.type = YAMP_DM;
-		retval.where = dupedwhere;
-		if (strcmp(safewhere, curUsername) == 0) {
+		retval.where = strdup(where);
+		if (strcmp(firstUsr, curUserID) == 0) {
 			retval.OtherGuy = minus + 1;
-		} else if (strcmp(minus + 1, curUsername) == 0) {
-			retval.OtherGuy = safewhere;
+		} else if (strcmp(minus + 1, curUserID) == 0) {
+			retval.OtherGuy = firstUsr;
 		} else {
-			free(dupedwhere);
-			free(safewhere);
 			return FALSE; // who the FUCK are you
 		}
 		retval.GuildName = NULL;
@@ -57,48 +49,48 @@ gboolean YAMPProcessWhere(char *where, char *curUsername, chat *out) {
 		return TRUE;
 	}
 }
-uint64_t hmap_username_hash(const void *item, uint64_t seed0, uint64_t seed1) {
-	return hashmap_sip(((user *)item)->username,
-					   strlen(((user *)item)->username), seed0, seed1);
+uint64_t hmap_username_hash(const void* item, uint64_t seed0, uint64_t seed1) {
+	return hashmap_sip(((user*)item)->username, strlen(((user*)item)->username),
+					   seed0, seed1);
 }
-int hmap_username_compare(const void *a, const void *b, void *udata) {
-	return strcmp(((const user *)a)->username, ((const user *)b)->username);
+int hmap_username_compare(const void* a, const void* b, void* udata) {
+	return strcmp(((const user*)a)->username, ((const user*)b)->username);
 }
-uint64_t hmap_userid_hash(const void *item, uint64_t seed0, uint64_t seed1) {
-	return hashmap_sip(((user *)item)->id,
-					   strlen(((user *)item)->id), seed0, seed1);
+uint64_t hmap_userid_hash(const void* item, uint64_t seed0, uint64_t seed1) {
+	return hashmap_sip(((user*)item)->id, strlen(((user*)item)->id), seed0,
+					   seed1);
 }
-int hmap_userid_compare(const void *a, const void *b, void *udata) {
-	return strcmp(((const user *)a)->id, ((const user *)b)->id);
+int hmap_userid_compare(const void* a, const void* b, void* udata) {
+	return strcmp(((const user*)a)->id, ((const user*)b)->id);
 }
-void hmap_username_free(void *item) {}
-void hmap_userid_free(void *item) {}
+void hmap_username_free(void* item) {}
+void hmap_userid_free(void* item) {}
 
-uint64_t hmap_userfd_hash(const void *item, uint64_t seed0, uint64_t seed1) {
-	int fd = ((user *)item)->con.fd;
+uint64_t hmap_userfd_hash(const void* item, uint64_t seed0, uint64_t seed1) {
+	int fd = ((user*)item)->con.fd;
 	return hashmap_sip(&fd, sizeof(fd), seed0, seed1);
 }
-int hmap_userfd_compare(const void *a, const void *b, void *udata) {
-	if (((const user *)a)->con.fd == ((const user *)b)->con.fd) {
+int hmap_userfd_compare(const void* a, const void* b, void* udata) {
+	if (((const user*)a)->con.fd == ((const user*)b)->con.fd) {
 		return 0;
-	} else if (((const user *)a)->con.fd < ((const user *)b)->con.fd) {
+	} else if (((const user*)a)->con.fd < ((const user*)b)->con.fd) {
 		return -1;
 	} else {
 		return 1;
 	}
 }
-void hmap_userfd_free(void *item) {}
+void hmap_userfd_free(void* item) {}
 
-char *MakeDMChannel(const char *a, const char *b) {
+char* MakeDMChannel(const char* a, const char* b) {
 	if (strcmp(a, b) < 0)
 		return g_strdup_printf("%s|%s", a, b);
 	else
 		return g_strdup_printf("%s|%s", b, a);
 }
 
-void sha256_hex(const char *input, char *output_hex) {
+void sha256_hex(const char* input, char* output_hex) {
 	unsigned char hash[SHA256_DIGEST_LENGTH];
-	SHA256((unsigned char *)input, strlen(input), hash);
+	SHA256((unsigned char*)input, strlen(input), hash);
 
 	// convert to hex string
 	for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
@@ -293,7 +285,7 @@ YampChannel* GetGCFromID(const char* gid) {
  *
  * Returns a heap object
  * NOTE: does no authorization, check with the functions of the type
-*******************************************************************************/
+ *******************************************************************************/
 YampChannel* GetChannelFromID(const char* id) {
 	if (!id || !*id)
 		return NULL;

@@ -94,6 +94,29 @@ int GenerateID_Inline(char* id) {
 	return 1;
 }
 
+int GenerateToken_Inline(char* id) {
+	static const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+	int pos = 0;
+
+	while (pos < 255) {
+		unsigned char byte;
+
+		if (RAND_bytes(&byte, 1) != 1) {
+			return 0;
+		}
+
+		if (byte >= 252)
+			continue;
+
+		(id)[pos++] = alphabet[byte % 36];
+	}
+
+	(id)[255] = '\0';
+
+	return 1;
+}
+
 cJSON* CreateUserObject(user* user) {
 	cJSON* obj = cJSON_CreateObject();
 
@@ -155,9 +178,15 @@ user ParseUserObject(cJSON* rawusr) {
 	return usr;
 }
 
-int RegisterUserAccount(char* name, char* passwd) {
+/*********************************************************
+  * RegisterUserAccount                                  
+  * Registers an user account      
+  
+  * @return the registered user ID (HEAP! FREE THIS AS THE CALLER)
+*********************************************************/
+char* RegisterUserAccount(char* email, char* name, char* passwd) {
 	const char* sql =
-		"INSERT INTO users (name, display_name, password, id) VALUES (?,?,?,?)";
+		"INSERT INTO users (name, display_name, password, id, email) VALUES (?,?,?,?,?)";
 
 	sqlite3_stmt* stmt;
 
@@ -178,13 +207,14 @@ int RegisterUserAccount(char* name, char* passwd) {
 	sqlite3_bind_text(stmt, 2, name, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 3, passwdh, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 4, id, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 5, email, -1, SQLITE_STATIC);
 
 	int ok = sqlite3_step(stmt) == SQLITE_DONE;
 
 	sqlite3_finalize(stmt);
 	free(id);
 
-	return ok;
+	return ok ? id : 0;
 }
 int UpdateUserProfile(char* id, user newprofile) {
 	const char* sql =
@@ -201,7 +231,7 @@ int UpdateUserProfile(char* id, user newprofile) {
 
 	return ok;
 }
-const char* GetSpaceIDFromName(char* name) {
+char* GetSpaceIDFromName(char* name) {
 	const char* sql = "SELECT id FROM spaces WHERE name = ?";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
@@ -212,7 +242,7 @@ const char* GetSpaceIDFromName(char* name) {
 	sqlite3_finalize(stmt);
 	return NULL;
 }
-const char* GetUserIDFromName(char* name) {
+char* GetUserIDFromName(char* name) {
 	const char* sql = "SELECT id FROM users WHERE name = ?";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
@@ -758,8 +788,17 @@ int CreateChannelsListFromName(const char* name, cJSON** output) {
 	return 1;
 }
 
+int CreateUsersOwnObjectFromID(char* name, cJSON** output) {
+	CreateUserObjectFromID(name, output);
+	return 1;
+}
 int CreateUsersOwnObjectFromUsername(char* name, cJSON** output) {
-	CreateUserObjectFromUsername(name, output);
+	char* id = GetUserIDFromName(name);
+	if(!id){
+		return 0;
+	}
+	CreateUsersOwnObjectFromID(id, output);
+	free(id);
 	return 1;
 }
 
@@ -781,6 +820,24 @@ cJSON* ListSpaceMembersFromID(char* id) {
 
 	sqlite3_finalize(stmt);
 	return members;
+}
+int CanAccessChat(const user* usr, char* id) {
+	chat cchat;
+	int ok = YAMPProcessWhere(id, usr->id, &cchat);
+	if(!ok){
+		return 0;
+	}
+	switch (cchat.type) {
+	case YAMP_SPACE_TEXT:{
+		return IsInSpaceViaUserID(usr->id, GetSpaceFromChannelID(id));
+	}
+	case YAMP_GC:
+		return IsInGC(usr->id, cchat.GC_ID);
+	case YAMP_DM:
+		return 1; // its validified in YAMPProcessWhere
+	default:
+		return 0;
+	}
 }
 int ListSpaceMembersTypeFromID(char* id, user** out) {
 	const char* sql =
@@ -815,7 +872,24 @@ int ListSpaceMembersTypeFromID(char* id, user** out) {
 	sqlite3_finalize(stmt);
 	return n;
 }
+char* GetSpaceFromChannelID(char* channel_id){
+	const char* sql = "SELECT \"space\" FROM \"channels\" WHERE "
+					  "\"id\" = ?";
+	sqlite3_stmt* stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, channel_id, -1, SQLITE_STATIC);
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		char* str = strdup(sqlite3_column_text(stmt, 0));
+		sqlite3_finalize(stmt);
+		return str;
+	}
+	sqlite3_finalize(stmt);
+	return NULL;
+}
 int IsInSpaceViaUserID(char* userid, char* spaceid) {
+	if(!(userid && spaceid)){
+		return 0; // It can be paired with GetSpaceFromChannelID without checks thanks to this
+	}
 	const char* sql = "SELECT 1 FROM \"user-space\" WHERE "
 					  "\"space-id\" = ? AND \"user-id\" = ?";
 	sqlite3_stmt* stmt;
@@ -840,11 +914,19 @@ YampMessage* AllocMessageType(YampMessage msg){
 	heapmsg->content=strdup(msg.content);
 	return heapmsg;
 }
+
+void FreeMessageObject(YampMessage* msg) {
+	free(msg->content);
+	if (msg->reply)
+		FreeMessageObject(msg->reply);
+	free(msg);
+}
+
 YampMessage* CreateMessageTypeFromID(char* id){
 	if(id == NULL){
 		return NULL;
 	}
-	const char* sql = "SELECT \"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\",\"channel\" FROM \"messages\" WHERE \"channel\" = ?";
+	const char* sql = "SELECT \"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\",\"channel\" FROM \"messages\" WHERE \"id\" = ?";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	sqlite3_bind_text(stmt,1,id,-1,SQLITE_STATIC);
@@ -859,10 +941,27 @@ YampMessage* CreateMessageTypeFromID(char* id){
 		strcpy(msg.channel,sqlite3_column_text(stmt, 6));
 		YampMessage* heapmsg = AllocMessageType(msg);
 		sqlite3_finalize(stmt);
+		return heapmsg;
 	} else{
 		sqlite3_finalize(stmt);
 	}
 	return NULL;
+}
+int DeleteMessage(char* id){
+	if(id == NULL){
+		return 0;
+	}
+	const char* sql = "DELETE FROM \"messages\" WHERE \"id\" = ?";
+	sqlite3_stmt* stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt,1,id,-1,SQLITE_STATIC);
+	if(sqlite3_step(stmt)==SQLITE_DONE){
+		sqlite3_finalize(stmt);
+		return 1;
+	} else{
+		sqlite3_finalize(stmt);
+	}
+	return 0;
 }
 cJSON* CreateMessageObject(YampMessage* msg) {
 	cJSON* object = cJSON_CreateObject();
@@ -1102,30 +1201,75 @@ int AddMemberToGC(char* uid, char* gcid) {
 	sqlite3_finalize(stmt);
 	return 0;
 }
-cJSON* GetMessageHistory(char* where) {
-	cJSON* list = cJSON_CreateArray();
-	const char* sql = "SELECT \"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\" FROM \"messages\" WHERE "
-					  "\"channel\" = ? ORDER BY \"timestamp\" ASC";
-	sqlite3_stmt* stmt;
-	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
-	sqlite3_bind_text(stmt, 1, where, -1, SQLITE_STATIC);
 
-	for (int rc = sqlite3_step(stmt); rc == SQLITE_ROW;
-		 rc = sqlite3_step(stmt)) {
-		YampMessage msg = {0};
-		strcpy(msg.author,sqlite3_column_text(stmt, 0));
-		msg.content=sqlite3_column_text(stmt, 1);
-		strcpy(msg.id,sqlite3_column_text(stmt, 2));
-		msg.type = sqlite3_column_int(stmt, 3);
-		msg.reply = CreateMessageTypeFromID(sqlite3_column_text(stmt, 4));
-		msg.timestamp = sqlite3_column_int(stmt, 5);
-		strcpy(msg.channel,where);
-		cJSON_AddItemToArray(
-			list,
-			CreateMessageObject(&msg));
+cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit) {
+	static const char* sql_newest =
+		"SELECT \"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\" "
+		"FROM \"messages\" WHERE \"channel\" = ?1 "
+		"ORDER BY \"timestamp\" DESC, rowid DESC LIMIT ?2";
+
+	static const char* sql_before =
+		"SELECT \"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\" "
+		"FROM \"messages\" WHERE \"channel\" = ?1 "
+		"AND (\"timestamp\", rowid) < "
+		"  (SELECT \"timestamp\", rowid FROM \"messages\" "
+		"   WHERE \"id\" = ?3 AND \"channel\" = ?1) "
+		"ORDER BY \"timestamp\" DESC, rowid DESC LIMIT ?2";
+
+	sqlite3_stmt* stmt = NULL;
+	if (sqlite3_prepare_v2(DB, before ? sql_before : sql_newest, -1, &stmt,
+						   NULL) != SQLITE_OK) {
+		return NULL;
 	}
 
+	sqlite3_bind_text(stmt, 1, where, -1, SQLITE_STATIC);
+	sqlite3_bind_int(stmt, 2, limit > 0 ? limit : -1);
+	if (before)
+		sqlite3_bind_text(stmt, 3, before, -1, SQLITE_STATIC);
+
+	cJSON* list = cJSON_CreateArray();
+	if (!list) {
+		sqlite3_finalize(stmt);
+		return NULL;
+	}
+
+	int rc;
+	while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+		YampMessage msg = {0};
+
+		const char* author = (const char*)sqlite3_column_text(stmt, 0);
+		const char* content = (const char*)sqlite3_column_text(stmt, 1);
+		const char* id = (const char*)sqlite3_column_text(stmt, 2);
+		const char* reply = (const char*)sqlite3_column_text(stmt, 4);
+
+		snprintf(msg.author, sizeof(msg.author), "%s", author ? author : "");
+		snprintf(msg.id, sizeof(msg.id), "%s", id ? id : "");
+		snprintf(msg.channel, sizeof(msg.channel), "%s", where);
+		msg.content = (char*)(content ? content : "");
+		msg.type = sqlite3_column_int(stmt, 3);
+		if (reply && *reply)
+			msg.reply = CreateMessageTypeFromID(reply);
+		msg.timestamp = sqlite3_column_int(stmt, 5);
+
+		cJSON* obj = CreateMessageObject(&msg);
+		if (!obj) {
+			rc = SQLITE_ERROR;
+			break;
+		}
+		cJSON_InsertItemInArray(list, 0, obj);
+	}
+
+	sqlite3_finalize(stmt);
+
+	if (rc != SQLITE_DONE) {
+		cJSON_Delete(list);
+		return NULL;
+	}
 	return list;
+}
+
+cJSON* GetMessageHistory(char* where) {
+	return GetMessageHistoryPage(where, NULL, 0);
 }
 int PushEvent(Connection con, char* event, cJSON* data) {
 	cJSON* payload = cJSON_CreateObject();
@@ -1347,6 +1491,19 @@ int PushTyping(char* toID, char* fromID, char* channel) {
 		cJSON_AddItemToObject(body,"user",user);
 		cJSON_AddStringToObject(body,"channel_id",channel);
 		PushEvent(con, "Typing", body);
+	}
+	return 0;
+}
+int PushMessageDeleted(char* toID, char* message) {
+	cJSON* payload = cJSON_CreateObject();
+	user search;
+	strcpy(search.id, toID);
+	const user* usr = hashmap_get(UsersByID, &search);
+	if (usr) {
+		Connection con = usr->con;
+		cJSON* body = cJSON_CreateObject();
+		cJSON_AddStringToObject(body,"message_id",message);
+		PushEvent(con, "MessageDeleted", body);
 	}
 	return 0;
 }

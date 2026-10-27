@@ -14,11 +14,10 @@ typedef struct {
 	int code;
 	const char* msg;
 } ErrorData;
-
 static const ErrorData errors[] = {
 	{0, "OK"},
 	{1, "Not authenticated"},
-	{2, "Not a part of space/group"},
+	{2, "Forbidden"},
 	{3, "Malformed request"},
 	{4, "Internal server error"},
 	{5, "Ratelimited"},
@@ -29,6 +28,7 @@ static const ErrorData errors[] = {
 	{10, "No such object (user/space)"},
 	{11, "No such channel, malformed where field?"},
 	{12, "Above the maximum length of a text field"},
+	{13, "Replied message does not exist"},
 };
 
 static const char* ErrorMessage(int code) {
@@ -106,6 +106,15 @@ char** CollectRelatedUserIDs(const char* username, const char* selfid,
 	cJSON_Delete(friends);
 	return list;
 }
+
+#define HISTORY_DEFAULT_LIMIT 50
+#define HISTORY_MAX_LIMIT 100
+
+static user* UserFromCon(const Connection* con) {
+	user search = {0};
+	search.con = *con;
+	return hashmap_get(UsersByFD, &search);
+}
 int ProcessRequest(char* payload, char** response, int sockid,
 				   Connection* con) {
 	cJSON* WireParsed = cJSON_Parse(payload);
@@ -154,29 +163,40 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			InsertError(responsebuild, 3);
 			goto finishresp;
 		}
-		if (strcmp(endpoint, "login") == 0) {
-			char* username = cJSON_GetStringValue(
-				cJSON_GetObjectItem(PayloadParsed, "username"));
-			char* passwd = cJSON_GetStringValue(
-				cJSON_GetObjectItem(PayloadParsed, "password"));
-			if (!(username && passwd)) {
+		if (strcmp(endpoint, "auth") == 0) {
+			char* token = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "token"));
+			if (!(token)) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			char hashedPassword[65];
-			sha256_hex(passwd, hashedPassword);
+			char tokenhash[65];
+			sha256_hex(token, tokenhash);
+			const char* tsql =
+				"SELECT \"user-id\" FROM \"sessions\" WHERE \"token\" = ?";
+			sqlite3_stmt* tstmt;
+			sqlite3_prepare_v2(DB, tsql, -1, &tstmt, NULL);
+			sqlite3_bind_text(tstmt, 1, tokenhash, -1, SQLITE_STATIC);
+			if (sqlite3_step(tstmt) != SQLITE_ROW) {
+				sqlite3_finalize(tstmt);
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char user_id[17];
+			strncpy(user_id, (const char*)sqlite3_column_text(tstmt, 0), 17);
+			sqlite3_finalize(tstmt);
 			const char* sql =
-				"SELECT name, display_name, id FROM users WHERE name "
-				"= ? AND password = ?";
+				"SELECT name, display_name, id FROM users WHERE id = ?";
 			sqlite3_stmt* stmt;
 			sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
-			sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
-			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 1, user_id, -1, SQLITE_STATIC);
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
-				printf("user login %s!", username);
+				printf("New socket authentication! FD %i | Username %s\n",
+					   con->fd, sqlite3_column_text(stmt, 0));
 				user* newUser = malloc(sizeof(user));
 				*newUser = (user){0};
-				newUser->username = strdup(username);
+				newUser->username =
+					strdup((const char*)sqlite3_column_text(stmt, 0));
 				newUser->displayname =
 					strdup((const char*)sqlite3_column_text(stmt, 1));
 				strncpy(newUser->id, (const char*)sqlite3_column_text(stmt, 2),
@@ -189,7 +209,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				char** usrlist = NULL;
 				int nusrlist = 0;
 				cJSON* spaces;
-				CreateSpacesListFromUsername(username, &spaces);
+				CreateSpacesListFromID(newUser->id, &spaces);
 				cJSON_AddItemToObject(responsepayload, "spaces", spaces);
 				for (int i = 0; i < cJSON_GetArraySize(spaces); i++) {
 					cJSON* space = cJSON_GetArrayItem(spaces, i);
@@ -241,10 +261,10 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					PushStatusUpdate(usrlist[i], newUser->id, newUser->status);
 				}
 				cJSON* tmp;
-				CreateUsersOwnObjectFromUsername(username, &tmp);
+				CreateUsersOwnObjectFromID(newUser->id, &tmp);
 				cJSON_AddItemToObject(responsepayload, "user", tmp);
 				FriendReqEntry* fql = NULL;
-				int c = ListFriendReqs(username, &fql);
+				int c = ListFriendReqs(newUser->id, &fql);
 				cJSON* incfq =
 					cJSON_AddArrayToObject(responsepayload, "incoming_fq");
 				cJSON* outfq =
@@ -267,7 +287,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 				cJSON* conversations;
 				if (CreateConvListFromUserID(newUser->id, &conversations)) {
-					cJSON_AddItemToObject(responsepayload, "conversations", conversations);
+					cJSON_AddItemToObject(responsepayload, "conversations",
+										  conversations);
 				}
 				for (int i = 0; i < nrespoverrides; i++) {
 					cJSON_AddStringToObject(responsepayload,
@@ -279,26 +300,105 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 3);
 			}
 			sqlite3_finalize(stmt);
+		} else if (strcmp(endpoint, "login") == 0) {
+			char* email = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "email"));
+			char* passwd = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "password"));
+			char* device = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "device"));
+			int device_type = cJSON_GetNumberValue(
+				cJSON_GetObjectItem(PayloadParsed, "device_type"));
+
+			if (!(email && passwd)) {
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			char hashedPassword[65];
+			sha256_hex(passwd, hashedPassword);
+			const char* sql = "SELECT id FROM users WHERE email "
+							  "= ? AND password = ?";
+			sqlite3_stmt* stmt;
+			sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+			sqlite3_bind_text(stmt, 1, email, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 2, hashedPassword, -1, SQLITE_STATIC);
+			if (sqlite3_step(stmt) != SQLITE_ROW) {
+				InsertError(responsebuild, 3);
+				sqlite3_finalize(stmt);
+				goto finishresp;
+			}
+			char* user_id = strdup(sqlite3_column_text(stmt, 0));
+			sqlite3_finalize(stmt);
+
+			sqlite3_stmt* stmt2;
+			char token[257];
+			GenerateToken_Inline(token);
+			char tokenhash[65];
+			sha256_hex(token, tokenhash);
+			const char* token_sql =
+				"INSERT INTO \"sessions\" (\"user-id\", \"device\", "
+				"\"device-type\", \"token\") VALUES (?, ?, ?, ?)";
+			sqlite3_prepare_v2(DB, token_sql, -1, &stmt2, NULL);
+			sqlite3_bind_text(stmt2, 1, user_id, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt2, 2, device, -1, SQLITE_STATIC);
+			sqlite3_bind_int(stmt2, 3, device_type);
+			sqlite3_bind_text(stmt2, 4, tokenhash, -1, SQLITE_STATIC);
+			if (sqlite3_step(stmt2) != SQLITE_DONE) {
+				free(user_id);
+				InsertError(responsebuild, 3);
+				sqlite3_finalize(stmt);
+				goto finishresp;
+			}
+			cJSON_AddStringToObject(responsepayload, "token", token);
+			InsertError(responsebuild, 0);
+			free(user_id);
 		} else if (strcmp(endpoint, "register") == 0) {
 			if (time(NULL) - con->LastRegistration < 300) {
 				InsertError(responsebuild, 5);
 				goto finishresp;
 			}
-			cJSON* emailp =
-				cJSON_GetObjectItem(PayloadParsed, "email"); // for future
-			char* username = cJSON_GetStringValue(
-				cJSON_GetObjectItemCaseSensitive(PayloadParsed, "username"));
+
+			char* email = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "email"));
+			char* name = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "username"));
 			char* passwd = cJSON_GetStringValue(
-				cJSON_GetObjectItemCaseSensitive(PayloadParsed, "password"));
-			if (!(username && passwd)) {
+				cJSON_GetObjectItem(PayloadParsed, "password"));
+			char* device = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "device"));
+			int device_type = cJSON_GetNumberValue(
+				cJSON_GetObjectItem(PayloadParsed, "device_type"));
+
+			if (!(email && passwd && device && name)) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
-			} else {
-				cJSON* resp = cJSON_CreateObject();
-				InsertError(responsebuild,
-							(!RegisterUserAccount(username, passwd)) * 3);
-				cJSON_AddItemToObject(responsebuild, "response", resp);
 			}
+			char* user_id = RegisterUserAccount(email, name, passwd);
+
+			char token[257];
+			GenerateToken_Inline(token);
+			char tokenhash[65];
+			sha256_hex(token, tokenhash);
+			const char* token_sql =
+				"INSERT INTO \"sessions\" (\"user-id\", \"device\", "
+				"\"device-type\", \"token\") VALUES (?, ?, ?, ?)";
+			sqlite3_stmt* stmt2;
+			sqlite3_prepare_v2(DB, token_sql, -1, &stmt2, NULL);
+			sqlite3_bind_text(stmt2, 1, user_id, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt2, 2, device, -1, SQLITE_STATIC);
+			sqlite3_bind_int(stmt2, 3, device_type);
+			sqlite3_bind_text(stmt2, 4, tokenhash, -1, SQLITE_STATIC);
+			if (sqlite3_step(stmt2) != SQLITE_DONE) {
+				free(user_id);
+				InsertError(responsebuild, 3);
+				sqlite3_finalize(stmt2);
+				goto finishresp;
+			}
+			InsertError(responsebuild, 0);
+			free(user_id);
+
+			cJSON_AddStringToObject(responsepayload, "token", token);
+
 			con->LastRegistration = time(NULL);
 		} else if (strcmp(endpoint, "ListFriends") == 0) {
 			user search;
@@ -314,7 +414,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					cJSON_AddItemToObject(responsepayload, "friends", tmp);
 				}
 			}
-		} else if(strcmp(endpoint,"ListConversations")==0){
+		} else if (strcmp(endpoint, "ListConversations") == 0) {
 			user search;
 			search.con = *con;
 			user* usr = hashmap_get(UsersByFD, &search);
@@ -325,105 +425,115 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			cJSON* tmp;
 			if (usr->username) {
 				if (CreateConvListFromUserID(usr->id, &tmp)) {
-					cJSON_AddItemToObject(responsepayload, "conversations", tmp);
+					cJSON_AddItemToObject(responsepayload, "conversations",
+										  tmp);
 				}
 			}
-		} else if(strcmp(endpoint,"StartDM")==0){
+		} else if (strcmp(endpoint, "StartDM") == 0) {
 			user search;
 			search.con = *con;
-			user* usr = hashmap_get(UsersByFD,&search);
-			if(!usr){
+			user* usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			char* recipient = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "recipient"));
-			if(!recipient){
+			char* recipient = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "recipient"));
+			if (!recipient) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			if(!HasDMs(usr->id,recipient)){
-				YampChannel ch = CreateDM(usr->id,recipient);
-				PushNewConversation(usr->id,ch);
-				PushNewConversation(recipient,ch);
+			if (!HasDMs(usr->id, recipient)) {
+				YampChannel ch = CreateDM(usr->id, recipient);
+				PushNewConversation(usr->id, ch);
+				PushNewConversation(recipient, ch);
 			}
-			InsertError(responsebuild,0);
-		} else if(strcmp(endpoint,"CreateGC")==0){
+			InsertError(responsebuild, 0);
+		} else if (strcmp(endpoint, "CreateGC") == 0) {
 			user search;
 			search.con = *con;
-			user* usr = hashmap_get(UsersByFD,&search);
-			if(!usr){
+			user* usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			cJSON* initial_members = cJSON_GetObjectItem(PayloadParsed, "members");
-			if(!initial_members){
+			cJSON* initial_members =
+				cJSON_GetObjectItem(PayloadParsed, "members");
+			if (!initial_members) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			user* parsed_initmem = malloc(cJSON_GetArraySize(initial_members)*sizeof(user));
+			user* parsed_initmem =
+				malloc(cJSON_GetArraySize(initial_members) * sizeof(user));
 			int validusers = 0;
-			for(int i = 0; i<cJSON_GetArraySize(initial_members); i++){
+			for (int i = 0; i < cJSON_GetArraySize(initial_members); i++) {
 				user usr;
-				if(CreateUserTypeFromID(cJSON_GetArrayItem(initial_members, i)->valuestring,&usr)){
-					parsed_initmem[i]=usr;
+				if (CreateUserTypeFromID(
+						cJSON_GetArrayItem(initial_members, i)->valuestring,
+						&usr)) {
+					parsed_initmem[i] = usr;
 					validusers++;
 				}
 			}
-			CreateGC(*usr,validusers,parsed_initmem);
-			InsertError(responsebuild,0);
-		} else if(strcmp(endpoint,"UpdateGC")==0){
+			CreateGC(*usr, validusers, parsed_initmem);
+			InsertError(responsebuild, 0);
+		} else if (strcmp(endpoint, "UpdateGC") == 0) {
 			user search;
 			search.con = *con;
-			user* usr = hashmap_get(UsersByFD,&search);
-			if(!usr){
+			user* usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			char* new_name = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "name"));
-			char* gcid = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "gc"));
-			if(!new_name){
+			char* new_name = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "name"));
+			char* gcid =
+				cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "gc"));
+			if (!new_name) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			if(!gcid){
+			if (!gcid) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
 			YampChannel gc;
-			snprintf(gc.id,17,"%s",gcid);
+			snprintf(gc.id, 17, "%s", gcid);
 			gc.name = new_name;
-			if(IsInGC(usr->id,gcid)){
+			if (IsInGC(usr->id, gcid)) {
 				UpdateGC(&gc);
-				InsertError(responsebuild,0);
+				InsertError(responsebuild, 0);
 			} else {
-				InsertError(responsebuild,2);
+				InsertError(responsebuild, 2);
 			}
-		} else if(strcmp(endpoint,"AddMemberToGC")==0){
+		} else if (strcmp(endpoint, "AddMemberToGC") == 0) {
 			user search;
 			search.con = *con;
-			user* usr = hashmap_get(UsersByFD,&search);
-			if(!usr){
+			user* usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			char* userid = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "user"));
-			char* gcid = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "gc"));
-			if(!userid){
+			char* userid = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "user"));
+			char* gcid =
+				cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "gc"));
+			if (!userid) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			if(!gcid){
+			if (!gcid) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			if(IsInGC(usr->id,gcid)){
+			if (IsInGC(usr->id, gcid)) {
 				AddMemberToGC(userid, gcid);
-				InsertError(responsebuild,0);
+				InsertError(responsebuild, 0);
 			} else {
-				InsertError(responsebuild,2);
+				InsertError(responsebuild, 2);
 			}
-		} else if(strcmp(endpoint,"RemoveFromGC")==0){
-		
+		} else if (strcmp(endpoint, "RemoveFromGC") == 0) {
+			// TODO implement removing people from GCs, into handlers.c and here
 		} else if (strcmp(endpoint, "ListSpaceMembers") == 0) {
 			user search;
 			search.con = *con;
@@ -471,35 +581,31 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			chat wherep;
-			if (!YAMPProcessWhere(where, fromWho, &wherep)) {
+			if (!CanAccessChat(usr, where)) {
 				InsertError(responsebuild, 2);
 				goto finishresp;
-			} else {
-				if (wherep.type == YAMP_SPACE_TEXT &&
-					!IsInSpaceViaUserID(usr->id, wherep.GuildName)) {
-					InsertError(responsebuild, 2);
-					goto finishresp;
-				}
 			}
 			chat chatCtx;
 			YAMPProcessWhere(where, fromWho, &chatCtx);
 			if (chatCtx.type >= 40) { // Dirty check for space channels
 				YampMessage msg = {0};
-				strcpy(msg.channel,where);
-				strcpy(msg.author,fromWho);
+				strcpy(msg.channel, where);
+				strcpy(msg.author, fromWho);
 				msg.timestamp = time(NULL);
 				msg.type = 0;
 				msg.content = content;
-				// InsertMessage only cares about the ID, and only thats saved to the db
-				// so rather than resolving the ID just make a fake object, I should verify the reply ID soon, or maybe in SQL relations
-				if(reply){
-					msg.reply = malloc(sizeof(YampMessage));
-					strncpy(msg.reply->id,reply,17);
+				if (reply) {
+					msg.reply = CreateMessageTypeFromID(reply);
+					if (!msg.reply) {
+						InsertError(responsebuild, 13);
+						goto finishresp;
+					}
 				}
 				GenerateID_Inline(msg.id);
 
 				int outputLen;
-				cJSON* start = ListSpaceMembersFromID(chatCtx.GuildName);
+				char* space_id = GetSpaceFromChannelID(chatCtx.ChannelName);
+				cJSON* start = ListSpaceMembersFromID(space_id);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
 					cJSON* user = cJSON_GetArrayItem(start, i);
 					PushRecvIM(cJSON_GetObjectItem(user, "id")->valuestring,
@@ -511,34 +617,36 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				free(msg.reply); // NULL free is no-op so do not check that
 			} else if (chatCtx.type == YAMP_DM) {
 				YampMessage msg = {0};
-				strcpy(msg.channel,where);
-				strcpy(msg.author,fromWho);
+				strcpy(msg.channel, where);
+				strcpy(msg.author, fromWho);
 				msg.timestamp = time(NULL);
 				msg.type = 0;
 				msg.content = content;
-				// InsertMessage only cares about the ID, and only thats saved to the db
-				// so rather than resolving the ID just make a fake object, I should verify the reply ID soon, or maybe in SQL relations
-				if(reply){
-					msg.reply = malloc(sizeof(YampMessage));
-					strncpy(msg.reply->id,reply,17);
+				if (reply) {
+					msg.reply = CreateMessageTypeFromID(reply);
+					if (!msg.reply) {
+						InsertError(responsebuild, 13);
+						goto finishresp;
+					}
 				}
 				GenerateID_Inline(msg.id);
 				PushRecvIM(chatCtx.OtherGuy, where, &msg, nonce);
 				PushRecvIM(fromWho, where, &msg, nonce);
 				InsertMessage(&msg);
 				free(msg.reply); // NULL free is no-op so do not check that
-			} else if (chatCtx.type == YAMP_GC){
+			} else if (chatCtx.type == YAMP_GC) {
 				YampMessage msg = {0};
-				strcpy(msg.channel,where);
-				strcpy(msg.author,fromWho);
+				strcpy(msg.channel, where);
+				strcpy(msg.author, fromWho);
 				msg.timestamp = time(NULL);
 				msg.type = 0;
 				msg.content = content;
-				// InsertMessage only cares about the ID, and only thats saved to the db
-				// so rather than resolving the ID just make a fake object, I should verify the reply ID soon, or maybe in SQL relations
-				if(reply){
-					msg.reply = malloc(sizeof(YampMessage));
-					strncpy(msg.reply->id,reply,17);
+				if (reply) {
+					msg.reply = CreateMessageTypeFromID(reply);
+					if (!msg.reply) {
+						InsertError(responsebuild, 13);
+						goto finishresp;
+					}
 				}
 				GenerateID_Inline(msg.id);
 
@@ -555,6 +663,54 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				free(msg.reply); // NULL free is no-op so do not check that
 			}
 			InsertError(responsebuild, 0);
+		} else if (strcmp(endpoint, "DeleteMessage") == 0) {
+			user search;
+			search.con = *con;
+			user* usr = hashmap_get(UsersByFD, &search);
+			if (!usr) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			char* message = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "message_id"));
+			if (!message) {
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			YampMessage* msg = CreateMessageTypeFromID(message);
+			if (strcmp(msg->author, usr->id) != 0) {
+				FreeMessageObject(msg);
+				InsertError(responsebuild, 7);
+				goto finishresp;
+			}
+			int ok = DeleteMessage(message);
+			InsertError(responsebuild, ok ? 0 : 4);
+
+			chat chatCtx;
+			YAMPProcessWhere(msg->channel, usr->id, &chatCtx);
+			if (chatCtx.type >= 40) { // Dirty check for space channels
+				int outputLen;
+				char* space_id = GetSpaceFromChannelID(chatCtx.ChannelName);
+				cJSON* start = ListSpaceMembersFromID(space_id);
+				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
+					cJSON* user = cJSON_GetArrayItem(start, i);
+					PushMessageDeleted(
+						cJSON_GetObjectItem(user, "id")->valuestring, msg->id);
+				}
+				cJSON_Delete(start);
+			} else if (chatCtx.type == YAMP_DM) {
+				PushMessageDeleted(chatCtx.OtherGuy, msg->id);
+				PushMessageDeleted(usr->id, msg->id);
+			} else if (chatCtx.type == YAMP_GC) {
+				cJSON* start = ListGCMembersFromID(chatCtx.GC_ID);
+				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
+					cJSON* user = cJSON_GetArrayItem(start, i);
+					PushMessageDeleted(
+						cJSON_GetObjectItem(user, "id")->valuestring, msg->id);
+				}
+				cJSON_Delete(start);
+			}
+			FreeMessageObject(msg);
 		} else if (strcmp(endpoint, "GetChannels") == 0) {
 			user search;
 			search.con = *con;
@@ -599,44 +755,61 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			CreateSpaceObjectFromID(space, &details);
 			cJSON_AddItemToObject(responsepayload, "space", details);
 			InsertError(responsebuild, 0);
-		} else if (strcmp(endpoint, "GetMessageHistory") ==
-				   0) { // might use pascal case more... beware of breaking
-						// changes to other ones soon
-			user search;
-			search.con = *con;
-
-			user* usr = hashmap_get(UsersByFD, &search);
+		} else if (strcmp(endpoint, "GetMessageHistory") == 0) {
+			user* usr = UserFromCon(con);
 			if (!usr) {
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			char* fromWho = usr->id;
 
-			char* where = cJSON_GetStringValue(
-				cJSON_GetObjectItem(PayloadParsed, "channel"));
+			const char* where = cJSON_GetStringValue(
+				cJSON_GetObjectItemCaseSensitive(PayloadParsed, "channel"));
 			if (!where) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
+
 			chat wherep;
-			if (!YAMPProcessWhere(where, fromWho, &wherep)) {
+			if (!YAMPProcessWhere(where, usr->id, &wherep) ||
+				!CanAccessChat(usr, where)) {
 				InsertError(responsebuild, 2);
 				goto finishresp;
 			}
-			if (wherep.type == YAMP_SPACE_TEXT) {
-				if (!IsInSpaceViaUserID(usr->id, wherep.GuildName)) {
-					InsertError(responsebuild, 2);
+
+			int limit = HISTORY_DEFAULT_LIMIT;
+			cJSON* jlimit =
+				cJSON_GetObjectItemCaseSensitive(PayloadParsed, "limit");
+			if (jlimit) {
+				if (!cJSON_IsNumber(jlimit)) {
+					InsertError(responsebuild, 3);
 					goto finishresp;
 				}
+				limit = jlimit->valueint;
+				if (limit < 1)
+					limit = 1;
+				if (limit > HISTORY_MAX_LIMIT)
+					limit = HISTORY_MAX_LIMIT;
 			}
-			if (wherep.type == YAMP_GC) {
-				if (!IsInGC(usr->id, wherep.GC_ID)) {
-					InsertError(responsebuild, 2);
-					goto finishresp;
-				}
+			const char* before =
+				cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(
+					PayloadParsed, "before")); // null is newest
+
+			cJSON* messages = GetMessageHistoryPage(where, before, limit + 1);
+			if (!messages) {
+				InsertError(responsebuild, 4);
+				goto finishresp;
 			}
-			cJSON* messages = GetMessageHistory(where);
-			cJSON_AddItemToObject(responsepayload, "messages", messages);
+
+			bool has_more = cJSON_GetArraySize(messages) > limit;
+			if (has_more)
+				cJSON_DeleteItemFromArray(messages, 0);
+
+			if (!cJSON_AddItemToObject(responsepayload, "messages", messages)) {
+				cJSON_Delete(messages);
+				InsertError(responsebuild, 4);
+				goto finishresp;
+			}
+			cJSON_AddBoolToObject(responsepayload, "has_more", has_more);
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "RepositionChannel") == 0) {
 			char* space = cJSON_GetStringValue(
@@ -1168,7 +1341,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				free(finalpayload);
 				cJSON_Delete(uploadwire);
 			}
-		} else if(strcmp(endpoint,"JoinChannel")==0){
+		} else if (strcmp(endpoint, "JoinChannel") == 0) {
 			user search = {0};
 			search.con = *con;
 			user* found = hashmap_get(UsersByFD, &search);
@@ -1176,33 +1349,43 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			char* channel = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "channel"));
-			if(!channel){
-				InsertError(responsebuild,3);
+			char* channel = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "channel"));
+			if (!channel) {
+				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
 			chat parsedchat;
-			YAMPProcessWhere(channel, found->id, &parsedchat); // TODO do not use "curUsername" but rather "curID", same for "where"
-			if(parsedchat.type>=40){
+			YAMPProcessWhere(channel, found->id,
+							 &parsedchat); // TODO do not use "curUsername" but
+										   // rather "curID", same for "where"
+			if (parsedchat.type >= 40) {
 				user* members = NULL;
-				int nmembers = ListSpaceMembersTypeFromID(parsedchat.GuildName,&members); // TODO fix that outdated field name to say SpaceID
-				for(int i = 0; i<nmembers; i++){
-					PushJoinChannel(members[i].id,found->id,channel);
+				char* space_id = GetSpaceFromChannelID(parsedchat.ChannelName);
+				int nmembers = ListSpaceMembersTypeFromID(
+					space_id,
+					&members); // TODO fix that outdated field name to say
+							   // SpaceID
+				free(space_id);
+				for (int i = 0; i < nmembers; i++) {
+					PushJoinChannel(members[i].id, found->id, channel);
 					FreeUserFields(&members[i]);
 				}
 				free(members);
-			} else if(parsedchat.type==YAMP_GC){
+			} else if (parsedchat.type == YAMP_GC) {
 				user* members = NULL;
-				int nmembers = ListGCMembersTypeFromID(parsedchat.GC_ID,&members);
-				for(int i = 0; i<nmembers; i++){
-					PushJoinChannel(members->id,found->id,channel);
+				int nmembers =
+					ListGCMembersTypeFromID(parsedchat.GC_ID, &members);
+				for (int i = 0; i < nmembers; i++) {
+					PushJoinChannel(members[i].id, found->id, channel);
 					FreeUserFields(&members[i]);
 				}
 				free(members);
-			} else if(parsedchat.type==YAMP_DM){
-				PushJoinChannel(parsedchat.OtherGuy,found->id,channel);
+			} else if (parsedchat.type == YAMP_DM) {
+				PushJoinChannel(found->id, found->id, channel);
+				PushJoinChannel(parsedchat.OtherGuy, found->id, channel);
 			}
-		} else if(strcmp(endpoint,"LeaveChannel")==0){
+		} else if (strcmp(endpoint, "LeaveChannel") == 0) {
 			user search = {0};
 			search.con = *con;
 			user* found = hashmap_get(UsersByFD, &search);
@@ -1210,33 +1393,43 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			char* channel = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "channel"));
-			if(!channel){
-				InsertError(responsebuild,3);
+			char* channel = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "channel"));
+			if (!channel) {
+				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
 			chat parsedchat;
-			YAMPProcessWhere(channel, found->id, &parsedchat); // TODO do not use "curUsername" but rather "curID", same for "where"
-			if(parsedchat.type>=40){
+			YAMPProcessWhere(channel, found->id,
+							 &parsedchat); // TODO do not use "curUsername" but
+										   // rather "curID", same for "where"
+			if (parsedchat.type >= 40) {
 				user* members = NULL;
-				int nmembers = ListSpaceMembersTypeFromID(parsedchat.GuildName,&members); // TODO fix that outdated field name to say SpaceID
-				for(int i = 0; i<nmembers; i++){
-					PushLeftChannel(members[i].id,found->id,channel);
+				char* space_id = GetSpaceFromChannelID(parsedchat.ChannelName);
+				int nmembers = ListSpaceMembersTypeFromID(
+					space_id,
+					&members); // TODO fix that outdated field name to say
+							   // SpaceID
+				free(space_id);
+				for (int i = 0; i < nmembers; i++) {
+					PushLeftChannel(members[i].id, found->id, channel);
 					FreeUserFields(&members[i]);
 				}
 				free(members);
-			} else if(parsedchat.type==YAMP_GC){
+			} else if (parsedchat.type == YAMP_GC) {
 				user* members = NULL;
-				int nmembers = ListGCMembersTypeFromID(parsedchat.GC_ID,&members);
-				for(int i = 0; i<nmembers; i++){
-					PushLeftChannel(members->id,found->id,channel);
+				int nmembers =
+					ListGCMembersTypeFromID(parsedchat.GC_ID, &members);
+				for (int i = 0; i < nmembers; i++) {
+					PushLeftChannel(members->id, found->id, channel);
 					FreeUserFields(&members[i]);
 				}
 				free(members);
-			} else if(parsedchat.type==YAMP_DM){
-				PushLeftChannel(parsedchat.OtherGuy,found->id,channel);
+			} else if (parsedchat.type == YAMP_DM) {
+				PushLeftChannel(found->id, found->id, channel);
+				PushLeftChannel(parsedchat.OtherGuy, found->id, channel);
 			}
-		} else if(strcmp(endpoint,"Typing")==0){
+		} else if (strcmp(endpoint, "Typing") == 0) {
 			user search = {0};
 			search.con = *con;
 			user* found = hashmap_get(UsersByFD, &search);
@@ -1244,37 +1437,45 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 1);
 				goto finishresp;
 			}
-			char* channel = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "channel"));
-			if(!channel){
-				InsertError(responsebuild,3);
+			char* channel = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "channel"));
+			if (!channel) {
+				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
 			chat parsedchat;
-			YAMPProcessWhere(channel, found->id, &parsedchat); // TODO do not use "curUsername" but rather "curID", same for "where"
-			if(parsedchat.type>=40){
+			YAMPProcessWhere(channel, found->id,
+							 &parsedchat); // TODO do not use "curUsername" but
+										   // rather "curID", same for "where"
+			if (parsedchat.type >= 40) {
 				user* members = NULL;
-				int nmembers = ListSpaceMembersTypeFromID(parsedchat.GuildName,&members); // TODO fix that outdated field name to say SpaceID
-				for(int i = 0; i<nmembers; i++){
-					if(strcmp(members[i].id,found->id)==0){
+				char* space_id = GetSpaceFromChannelID(parsedchat.ChannelName);
+				int nmembers = ListSpaceMembersTypeFromID(
+					space_id,
+					&members); // TODO fix that outdated field name to say
+							   // SpaceID
+				for (int i = 0; i < nmembers; i++) {
+					if (strcmp(members[i].id, found->id) == 0) {
 						continue;
 					}
-					PushTyping(members[i].id,found->id,channel);
+					PushTyping(members[i].id, found->id, channel);
 					FreeUserFields(&members[i]);
 				}
 				free(members);
-			} else if(parsedchat.type==YAMP_GC){
+			} else if (parsedchat.type == YAMP_GC) {
 				user* members = NULL;
-				int nmembers = ListGCMembersTypeFromID(parsedchat.GC_ID,&members);
-				for(int i = 0; i<nmembers; i++){
-					if(strcmp(members[i].id,found->id)==0){
+				int nmembers =
+					ListGCMembersTypeFromID(parsedchat.GC_ID, &members);
+				for (int i = 0; i < nmembers; i++) {
+					if (strcmp(members[i].id, found->id) == 0) {
 						continue;
 					}
-					PushTyping(members[i].id,found->id,channel);
+					PushTyping(members[i].id, found->id, channel);
 					FreeUserFields(&members[i]);
 				}
 				free(members);
-			} else if(parsedchat.type==YAMP_DM){
-				PushTyping(parsedchat.OtherGuy,found->id,channel);
+			} else if (parsedchat.type == YAMP_DM) {
+				PushTyping(parsedchat.OtherGuy, found->id, channel);
 			}
 		} else {
 			// Invalid endpoint!?
