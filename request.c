@@ -480,6 +480,10 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 			}
 			CreateGC(*usr, validusers, parsed_initmem);
+			
+			for(int i = 0; i<validusers; i++){
+				// PushNewConversation(parsed_initmem[0].id, YampChannel conv)
+			}
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "UpdateGC") == 0) {
 			user search;
