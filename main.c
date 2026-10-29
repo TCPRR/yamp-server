@@ -22,6 +22,7 @@
 #include "config.h"
 #include "handlers.h"
 #include "types.h"
+#include "http.h"
 Connection client_sockets[MAX_CLIENTS] = {0};
 int IPCSockets[MAX_IPC_CLIENTS] = {0};
 sqlite3* DB;
@@ -91,6 +92,14 @@ void* UnixListener(void* args) {
 		cJSON_Delete(payld);
 	}
 	return NULL;
+}
+void InsertMainRespOverride(char* key, char* value) {
+	MainRespOverride override;
+	override.key = strdup(key);
+	override.val = strdup(value);
+	respoverrides =
+		realloc(respoverrides, sizeof(MainRespOverride) * (nrespoverrides + 1));
+	respoverrides[nrespoverrides++] = override;
 }
 void* UnixAccepter(void* args) {
 	int fd = (int)args;
@@ -253,7 +262,7 @@ int main() {
 		0) {
 		printf("unix IPC listening\n");
 	}
-
+	InitYAMPHTTP();
 	struct pollfd pollfds[MAX_CLIENTS + 2];
 
 	while (1) {

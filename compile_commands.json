@@ -1,0 +1,182 @@
+[
+  {
+    "file": "globals.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "globals.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "handlers.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "handlers.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "helpers.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "helpers.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "http.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "http.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "main.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "main.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "network.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "network.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "request.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "request.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "toml.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "toml.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  },
+  {
+    "file": "hmap/hashmap.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-g",
+      "-O0",
+      "-fno-omit-frame-pointer",
+      "-fsanitize=address,undefined",
+      "-Iext/civetweb/include",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib64/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread",
+      "hmap/hashmap.c",
+      "-o",
+      "yampd"
+    ],
+    "directory": "/home/winsped/Projects/yamp-server",
+    "output": "yampd"
+  }
+]

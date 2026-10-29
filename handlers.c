@@ -40,37 +40,6 @@ char* Base36(unsigned long num, char* buf) {
 
 	return buf;
 }
-int GenerateID(char** id) {
-	static const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-
-	if (!id)
-		return 0;
-
-	*id = malloc(17);
-	if (!*id)
-		return 0;
-
-	int pos = 0;
-
-	while (pos < 16) {
-		unsigned char byte;
-
-		if (RAND_bytes(&byte, 1) != 1) {
-			free(*id);
-			*id = NULL;
-			return 0;
-		}
-
-		if (byte >= 252)
-			continue;
-
-		(*id)[pos++] = alphabet[byte % 36];
-	}
-
-	(*id)[16] = '\0';
-
-	return 1;
-}
 int GenerateID_Inline(char* id) {
 	static const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -93,13 +62,28 @@ int GenerateID_Inline(char* id) {
 
 	return 1;
 }
+int GenerateID(char** id) {
+	static const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+	if (!id)
+		return 0;
+
+	*id = malloc(17);
+	if (!*id)
+		return 0;
+	int ok = GenerateID_Inline(*id);
+	if(!ok){
+		free(*id);
+	}
+	return ok;
+}
 
 int GenerateToken_Inline(char* id) {
 	static const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 	int pos = 0;
 
-	while (pos < 255) {
+	while (pos < 256) {
 		unsigned char byte;
 
 		if (RAND_bytes(&byte, 1) != 1) {
@@ -112,7 +96,30 @@ int GenerateToken_Inline(char* id) {
 		(id)[pos++] = alphabet[byte % 36];
 	}
 
-	(id)[255] = '\0';
+	(id)[256] = '\0';
+
+	return 1;
+}
+
+int GenerateUploadToken_Inline(char* id) {
+	static const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+	int pos = 0;
+
+	while (pos < 256) {
+		unsigned char byte;
+
+		if (RAND_bytes(&byte, 1) != 1) {
+			return 0;
+		}
+
+		if (byte >= 252)
+			continue;
+
+		(id)[pos++] = alphabet[byte % 36];
+	}
+
+	(id)[256] = '\0';
 
 	return 1;
 }

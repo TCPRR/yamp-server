@@ -8,9 +8,14 @@ typedef struct {
     int   outgoing;     // 1 = you sent it, 0 = you received it
 } FriendReqEntry;
 
+// Identifier generators
 int GenerateID(char** id);
 int GenerateID_Inline(char* id);
 int GenerateToken_Inline(char* id);
+int GenerateUploadToken_Inline(char* id);
+
+
+// Functions
 char* RegisterUserAccount(char* email, char* name, char* passwd);
 cJSON *CreateUserObject(user *user);
 int CreateSpaceObjectFromName(char *name, cJSON **output);

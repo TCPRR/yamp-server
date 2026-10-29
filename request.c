@@ -9,6 +9,7 @@
 #include <string.h>
 #include "config.h"
 #include <unistd.h>
+#include "http.h"
 #include <arpa/inet.h>
 typedef struct {
 	int code;
@@ -1332,27 +1333,9 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "UploadFile") == 0) {
-			char id[17];
-			GenerateID((char**)&id);
-			cJSON_AddStringToObject(responsepayload, "upload_token", id);
-			for (int i = 0; i < MAX_IPC_CLIENTS; i++) {
-				cJSON* uploadwire = cJSON_CreateObject();
-				cJSON_AddStringToObject(uploadwire, "endpoint",
-										"NewUploadToken");
-				cJSON* uploadpayload = cJSON_CreateObject();
-				cJSON_AddStringToObject(uploadpayload, "token", id);
-				cJSON_AddItemToObject(uploadwire, "payload", uploadpayload);
-				char* finalpayload = cJSON_PrintUnformatted(uploadwire);
-				uint32_t len = htonl(strlen(finalpayload));
-
-				if (IPCSockets[i]) {
-					write(IPCSockets[i], &len, 4);
-					write(IPCSockets[i], finalpayload, strlen(finalpayload));
-				}
-
-				free(finalpayload);
-				cJSON_Delete(uploadwire);
-			}
+			UploadToken* tok = RegisterUploadToken();
+			cJSON_AddStringToObject(responsepayload, "upload_token",tok->tok);
+			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "JoinChannel") == 0) {
 			user search = {0};
 			search.con = *con;
