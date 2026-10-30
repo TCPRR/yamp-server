@@ -23,6 +23,11 @@
 #include "handlers.h"
 #include "types.h"
 #include "http.h"
+#include <sys/epoll.h>
+#include <errno.h>
+#include <pthread.h>
+#include <stdint.h>
+
 Connection client_sockets[MAX_CLIENTS] = {0};
 int IPCSockets[MAX_IPC_CLIENTS] = {0};
 sqlite3* DB;
@@ -162,6 +167,51 @@ void* UnixAccepter(void* args) {
 
 	return NULL;
 }
+
+
+#define MAX_EVENTS 64
+#define EV_PLAIN_LISTEN MAX_CLIENTS
+#define EV_TLS_LISTEN (MAX_CLIENTS + 1)
+
+int epfd = -1;
+
+static inline uint64_t EvKey(int fd, uint32_t idx) {
+	return ((uint64_t)(uint32_t)fd << 32) | idx;
+}
+
+int EpollAdd(int ep, int fd, uint64_t key, uint32_t events) {
+	struct epoll_event ev = {.events = events, .data.u64 = key};
+	return epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+}
+
+void DisconnectClient(int i) {
+	Connection* c = &client_sockets[i];
+	int sd = c->fd;
+
+	user search;
+	search.con = *c;
+	user* usr = hashmap_get(UsersByFD, &search);
+	if (usr) {
+		int cnt;
+		char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
+		for (int j = 0; j < cnt; j++) {
+			PushStatusUpdate(relatedpeople[j], usr->id,
+							 (status){"offline", "", "", ""});
+		}
+		hashmap_delete(UsersByID, usr);
+		hashmap_delete(UsersByName, usr);
+		hashmap_delete(UsersByFD, usr);
+	}
+
+	epoll_ctl(epfd, EPOLL_CTL_DEL, sd, NULL);
+	if (c->encrypt && c->ssl) {
+		SSL_free(c->ssl);
+		c->ssl = NULL;
+	}
+	close(sd);
+	c->connected = 0;
+}
+
 int main() {
 	UsersByName = hashmap_new(sizeof(user), 256, 0, 0, hmap_username_hash,
 							  hmap_username_compare, hmap_username_free, NULL);
@@ -263,159 +313,122 @@ int main() {
 		printf("unix IPC listening\n");
 	}
 	InitYAMPHTTP();
-	struct pollfd pollfds[MAX_CLIENTS + 2];
+
+	epfd = epoll_create1(0);
+	if (epfd < 0) {
+		perror("epoll_create1");
+		return -1;
+	}
+	EpollAdd(epfd, master_socket, EvKey(master_socket, EV_PLAIN_LISTEN),
+			 EPOLLIN);
+	EpollAdd(epfd, master_tls_socket, EvKey(master_tls_socket, EV_TLS_LISTEN),
+			 EPOLLIN);
+
+	struct epoll_event events[MAX_EVENTS];
 
 	while (1) {
-		// build the pollfd array fresh each iteration
-		pollfds[0].fd = master_socket;
-		pollfds[0].events = POLLIN;
-		pollfds[0].revents = 0;
-		pollfds[1].fd = master_tls_socket;
-		pollfds[1].events = POLLIN;
-		pollfds[1].revents = 0;
-
-		for (int i = 0; i < MAX_CLIENTS; i++) {
-			sd = client_sockets[i].fd;
-			pollfds[i + 2].fd = client_sockets[i].connected
-									? sd
-									: -1; // -1 tells poll to ignore this slot
-			pollfds[i + 2].events = POLLIN;
-			pollfds[i + 2].revents = 0;
-		}
-
-		int activity = poll(pollfds, MAX_CLIENTS + 2, -1);
-		if (activity < 0) {
+		int n = epoll_wait(epfd, events, MAX_EVENTS, -1);
+		if (n < 0) {
 			if (errno == EINTR)
 				continue;
-			perror("poll");
+			perror("epoll_wait");
 			break;
 		}
 
-		// handle new connection
-		if (pollfds[0].revents & POLLIN) {
-			int new_socket = accept(master_socket, NULL, NULL);
+		for (int k = 0; k < n; k++) {
+			uint64_t key = events[k].data.u64;
+			uint32_t idx = (uint32_t)key;
+			int evfd = (int)(key >> 32);
+			uint32_t revents = events[k].events;
 
-			if (new_socket >= 0) {
+			if (idx == EV_PLAIN_LISTEN) {
+				int new_socket = accept(master_socket, NULL, NULL);
+				if (new_socket < 0)
+					continue;
 				YAMPSend(new_socket, "{\"type\":\"hello\"}", 16);
-
+				int placed = 0;
 				for (int i = 0; i < MAX_CLIENTS; i++) {
 					if (client_sockets[i].connected == 0) {
 						client_sockets[i].fd = new_socket;
+						client_sockets[i].ssl = NULL;
 						client_sockets[i].connected = 1;
 						client_sockets[i].encrypt = 0;
+						EpollAdd(epfd, new_socket, EvKey(new_socket, i),
+								 EPOLLIN);
+						placed = 1;
 						break;
 					}
 				}
+				if (!placed)
+					close(new_socket);
+				continue;
 			}
-		}
-		if (pollfds[1].revents & POLLIN) {
 
-			int new_socket = accept(master_tls_socket, NULL, NULL);
-
-			SSL* ssl = SSL_new(ctx);
-			SSL_set_fd(ssl, new_socket);
-
-			int ret = SSL_accept(ssl);
-			if (ret >= 0) {
+			if (idx == EV_TLS_LISTEN) {
+				int new_socket = accept(master_tls_socket, NULL, NULL);
+				if (new_socket < 0)
+					continue;
+				SSL* ssl = SSL_new(ctx);
+				SSL_set_fd(ssl, new_socket);
+				if (SSL_accept(ssl) != 1) {
+					SSL_free(ssl);
+					close(new_socket);
+					continue;
+				}
 				TLSYAMPSend(ssl, "{\"type\":\"hello\"}", 16);
-
+				int placed = 0;
 				for (int i = 0; i < MAX_CLIENTS; i++) {
 					if (client_sockets[i].connected == 0) {
 						client_sockets[i].fd = new_socket;
 						client_sockets[i].ssl = ssl;
 						client_sockets[i].connected = 1;
 						client_sockets[i].encrypt = 1;
+						EpollAdd(epfd, new_socket, EvKey(new_socket, i),
+								 EPOLLIN);
+						placed = 1;
 						break;
 					}
 				}
-			}
-		}
-
-		// handle client data
-		for (int i = 0; i < MAX_CLIENTS; i++) {
-			sd = client_sockets[i].fd;
-			if (sd <= 0)
-				continue;
-
-			short revents = pollfds[i + 2].revents;
-
-			if (revents & (POLLHUP | POLLERR | POLLNVAL)) {
-				close(sd);
-				client_sockets[i].connected = 0;
-				continue;
-			}
-
-			if (revents & POLLIN) {
-				if (client_sockets[i].encrypt) {
-					uint32_t len;
-					char* payload;
-					if (TLSYAMPRecv(client_sockets[i].ssl, &payload, &len)) {
-						printf("%s\n", payload);
-						char* response;
-						if (ProcessRequest(payload, &response, i,
-										   &client_sockets[i])) {
-							TLSYAMPSend(client_sockets[i].ssl, response,
-										strlen(response));
-						}
-						free(payload);
-					} else {
-						// disconnected or tried to abuse the server
-						SSL_free(client_sockets[i].ssl);
-						close(sd);
-						user search;
-						search.con = client_sockets[i];
-						user* usr = hashmap_get(UsersByFD, &search);
-						if (usr) {
-							int cnt;
-							char** relatedpeople = CollectRelatedUserIDs(
-								usr->username, NULL, &cnt);
-							for (int i = 0; i < cnt; i++) {
-								PushStatusUpdate(
-									relatedpeople[i], usr->id,
-									(status){"offline", "", "", ""});
-							}
-							hashmap_delete(UsersByID, usr);
-							hashmap_delete(UsersByName, usr);
-							hashmap_delete(UsersByFD, usr);
-						}
-						client_sockets[i].connected = 0;
-					}
-				} else {
-					uint32_t len;
-					char* payload;
-					if (YAMPRecv(sd, &payload, &len)) {
-						printf("%s\n", payload);
-						char* response;
-						if (ProcessRequest(payload, &response, i,
-										   &client_sockets[i])) {
-							YAMPSend(sd, response, strlen(response));
-						}
-						free(payload);
-					} else {
-						// disconnected or tried to abuse the server
-						close(sd);
-						user search;
-						search.con = client_sockets[i];
-						user* usr = hashmap_get(UsersByFD, &search);
-						if (usr) {
-							int cnt;
-							char** relatedpeople = CollectRelatedUserIDs(
-								usr->username, NULL, &cnt);
-							for (int i = 0; i < cnt; i++) {
-								PushStatusUpdate(
-									relatedpeople[i], usr->id,
-									(status){"offline", "", "", ""});
-							}
-							hashmap_delete(UsersByID, usr);
-							hashmap_delete(UsersByName, usr);
-							hashmap_delete(UsersByFD, usr);
-						}
-						client_sockets[i].connected = 0;
-					}
+				if (!placed) {
+					SSL_free(ssl);
+					close(new_socket);
 				}
+				continue;
+			}
+
+			// client socket
+			if (idx >= MAX_CLIENTS)
+				continue;
+			Connection* c = &client_sockets[idx];
+			if (!c->connected || c->fd != evfd)
+				continue; // stale event
+
+			if (revents & EPOLLIN) {
+				uint32_t len;
+				char* payload;
+				int ok;
+				if (c->encrypt)
+					ok = TLSYAMPRecv(c->ssl, &payload, &len);
+				else
+					ok = YAMPRecv(c->fd, &payload, &len);
+
+				if (ok) {
+					printf("%s\n", payload);
+					char* response;
+					if (ProcessRequest(payload, &response, idx, c)) {
+						if (c->encrypt)
+							TLSYAMPSend(c->ssl, response, strlen(response));
+						else
+							YAMPSend(c->fd, response, strlen(response));
+					}
+					free(payload);
+				} else {
+					// disconnected or tried to abuse the server
+					DisconnectClient(idx);
+				}
+			} else if (revents & (EPOLLHUP | EPOLLERR)) {
+				DisconnectClient(idx);
 			}
 		}
 	}
-
-	return 0;
 }

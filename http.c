@@ -337,7 +337,7 @@ int Upload_Handler(struct mg_connection* conn, void* cbdata) {
 	char filename[17];
 	GenerateID_Inline(filename);
 	char path[strlen(CDN_ROOT) + 1 + 16 + 1 + 8 + 1];
-	snprintf(path, sizeof path, "%s/%s.%s", CDN_ROOT, filename, ext);
+	snprintf(path, sizeof path, "%s/%s%s", CDN_ROOT, filename, ext);
 
 	int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
 	if (fd < 0) {
@@ -371,7 +371,7 @@ int Upload_Handler(struct mg_connection* conn, void* cbdata) {
 
 	char body[128];
 	int blen =
-		snprintf(body, sizeof body, "{\"filename\":\"%s.%s\"}", filename, ext);
+		snprintf(body, sizeof body, "{\"filename\":\"%s%s\"}", filename, ext);
 	mg_printf(conn,
 			  "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n"
 			  "Content-Length: %d\r\nConnection: close\r\n\r\n%s",
@@ -382,7 +382,7 @@ int InitYAMPHTTP(void) {
 	config.http_base_url = "https://yamp.root.sx";
 	config.maxupload = 512 * 1024 * 1024ull;
 	InsertMainRespOverride("yamp-http", config.http_base_url);
-	const char* options[] = {"listening_ports", "5227", NULL};
+	const char* options[] = {"listening_ports", "5226", NULL};
 
 	struct mg_callbacks callbacks;
 	memset(&callbacks, 0, sizeof(callbacks));
