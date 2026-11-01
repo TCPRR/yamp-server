@@ -72,7 +72,7 @@ int GenerateID(char** id) {
 	if (!*id)
 		return 0;
 	int ok = GenerateID_Inline(*id);
-	if(!ok){
+	if (!ok) {
 		free(*id);
 	}
 	return ok;
@@ -186,14 +186,14 @@ user ParseUserObject(cJSON* rawusr) {
 }
 
 /*********************************************************
-  * RegisterUserAccount                                  
-  * Registers an user account      
-  
+  * RegisterUserAccount
+  * Registers an user account
+
   * @return the registered user ID (HEAP! FREE THIS AS THE CALLER)
 *********************************************************/
 char* RegisterUserAccount(char* email, char* name, char* passwd) {
-	const char* sql =
-		"INSERT INTO users (name, display_name, password, id, email) VALUES (?,?,?,?,?)";
+	const char* sql = "INSERT INTO users (name, display_name, password, id, "
+					  "email) VALUES (?,?,?,?,?)";
 
 	sqlite3_stmt* stmt;
 
@@ -369,7 +369,8 @@ char* CreateSpaceInvite(const char* space_id, int uses) {
 	uint64_t v;
 	if (RAND_bytes((unsigned char*)&v, sizeof v) != 1)
 		return NULL;
-	v %= 2821109907456ULL; /* 36^8 */
+	v %= 2821109907456ULL; // ultra massive fucking number to make it even more
+						   // random
 	char code[9];
 	for (int i = 7; i >= 0; i--) {
 		code[i] = A[v % 36];
@@ -538,7 +539,7 @@ cJSON* CreateConvObject(const YampChannel* conv) {
 	if (!obj)
 		return NULL;
 
-	if(conv->name){
+	if (conv->name) {
 		cJSON_AddStringToObject(obj, "name", conv->name);
 	}
 
@@ -710,8 +711,7 @@ typedef struct {
 	char* parent;
 	cJSON* item;
 } ChannelRow;
-static ChannelRow* FindRowByID(ChannelRow* rows, size_t count,
-								 const char* id) {
+static ChannelRow* FindRowByID(ChannelRow* rows, size_t count, const char* id) {
 	for (size_t i = 0; i < count; i++) {
 		if (rows[i].id && strcmp(rows[i].id, id) == 0) {
 			return &rows[i];
@@ -800,7 +800,7 @@ int CreateUsersOwnObjectFromID(char* name, cJSON** output) {
 }
 int CreateUsersOwnObjectFromUsername(char* name, cJSON** output) {
 	char* id = GetUserIDFromName(name);
-	if(!id){
+	if (!id) {
 		return 0;
 	}
 	CreateUsersOwnObjectFromID(id, output);
@@ -830,11 +830,11 @@ cJSON* ListSpaceMembersFromID(char* id) {
 int CanAccessChat(const user* usr, char* id) {
 	chat cchat;
 	int ok = YAMPProcessWhere(id, usr->id, &cchat);
-	if(!ok){
+	if (!ok) {
 		return 0;
 	}
 	switch (cchat.type) {
-	case YAMP_SPACE_TEXT:{
+	case YAMP_SPACE_TEXT: {
 		return IsInSpaceViaUserID(usr->id, GetSpaceFromChannelID(id));
 	}
 	case YAMP_GC:
@@ -878,7 +878,7 @@ int ListSpaceMembersTypeFromID(char* id, user** out) {
 	sqlite3_finalize(stmt);
 	return n;
 }
-char* GetSpaceFromChannelID(char* channel_id){
+char* GetSpaceFromChannelID(char* channel_id) {
 	const char* sql = "SELECT \"space\" FROM \"channels\" WHERE "
 					  "\"id\" = ?";
 	sqlite3_stmt* stmt;
@@ -893,8 +893,9 @@ char* GetSpaceFromChannelID(char* channel_id){
 	return NULL;
 }
 int IsInSpaceViaUserID(char* userid, char* spaceid) {
-	if(!(userid && spaceid)){
-		return 0; // It can be paired with GetSpaceFromChannelID without checks thanks to this
+	if (!(userid && spaceid)) {
+		return 0; // It can be paired with GetSpaceFromChannelID without checks
+				  // thanks to this
 	}
 	const char* sql = "SELECT 1 FROM \"user-space\" WHERE "
 					  "\"space-id\" = ? AND \"user-id\" = ?";
@@ -909,62 +910,160 @@ int IsInSpaceViaUserID(char* userid, char* spaceid) {
 	sqlite3_finalize(stmt);
 	return 0;
 }
-YampMessage* AllocMessageType(YampMessage msg){
+YampMessage* AllocMessageType(YampMessage msg) {
 	YampMessage* heapmsg = malloc(sizeof(YampMessage));
-	heapmsg->type=msg.type;
-	strcpy(heapmsg->author,msg.author);
-	strcpy(heapmsg->channel,msg.channel);
-	strcpy(heapmsg->id,msg.id);
-	heapmsg->reply=msg.reply;
-	heapmsg->timestamp=msg.timestamp;
-	heapmsg->content=strdup(msg.content);
+	*heapmsg = msg;
+	heapmsg->type = msg.type;
+	heapmsg->content = dup0(msg.content);
 	return heapmsg;
+}
+int ListAttachmentsTypeForMessageID(char* msg_id, YampAttachment** out) {
+	const char* sql = "SELECT url,mime FROM attachments WHERE \"msg-id\"=? ORDER BY idx";
+	sqlite3_stmt* stmt;
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, msg_id, -1, SQLITE_STATIC);
+
+	YampAttachment* attachements = NULL;
+	int nAttachements = 0;
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		attachements =
+			realloc(attachements, sizeof(YampAttachment) * (nAttachements + 1));
+		YampAttachment attachement;
+		attachement.url = dup0(sqlite3_column_text(stmt, 0));
+		attachement.mime = dup0(sqlite3_column_text(stmt, 1));
+		attachements[nAttachements] = attachement;
+		nAttachements++;
+	}
+	sqlite3_finalize(stmt);
+	*out = attachements;
+	return nAttachements;
+}
+cJSON* CreateAttachmentJSON(YampAttachment* attachment) {
+	cJSON* obj = cJSON_CreateObject();
+	cJSON_AddStringToObject(obj, "url", attachment->url);
+	cJSON_AddStringToObject(obj, "mime", attachment->mime);
+	return obj; // very meowsome
+}
+YampAttachment* AllocAttachmentType(YampAttachment* attachment) {
+	YampAttachment* ret = malloc(sizeof(*ret));
+	*ret = *attachment;
+	ret->url = dup0(attachment->url);
+	ret->mime = dup0(attachment->mime);
+	return ret;
+}
+void FreeAttachmentTypeFields(YampAttachment* attach) {
+	free(attach->url);
+	free(attach->mime);
+}
+void FreeAttachmentObject(YampAttachment* attach) {
+	FreeAttachmentTypeFields(attach);
+	free(attach);
+}
+YampAttachment* ParseAttachmentJSON(cJSON* json) {
+	const char* mime = cJSON_GetStringValue(cJSON_GetObjectItem(json, "mime"));
+	const char* url  = cJSON_GetStringValue(cJSON_GetObjectItem(json, "url"));
+	if (!mime || !url) return NULL;
+	YampAttachment tmp = { .mime = (char*)mime, .url = (char*)url };
+	return AllocAttachmentType(&tmp);
+}
+cJSON* ListAttachmentsJSON(char* msg_id) {
+	YampAttachment* list;
+	int nlist = ListAttachmentsTypeForMessageID(msg_id, &list);
+	cJSON* arr = cJSON_CreateArray();
+	for (int i = 0; i < nlist; i++) {
+		cJSON_AddItemToArray(arr, CreateAttachmentJSON(&list[i]));
+		FreeAttachmentTypeFields(&list[i]);
+	}
+	free(list);
+	return arr;
+}
+int InsertAttachmentForMessageID(char* msg_id, YampAttachment* att) {
+	const char* sql = "INSERT INTO attachments(\"msg-id\",url,idx,mime) "
+					  "VALUES(?1,?2,(SELECT COALESCE(MAX(idx)+1,0) FROM "
+					  "attachments WHERE \"msg-id\"=?1),?3) "
+					  "RETURNING idx";
+	sqlite3_stmt* stmt;
+	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK)
+		return -1;
+
+	sqlite3_bind_text(stmt, 1, msg_id, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, att->url, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 3, att->mime, -1, SQLITE_STATIC);
+
+	int idx = -1;
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		idx = sqlite3_column_int(stmt, 0);
+		if (sqlite3_step(stmt) != SQLITE_DONE)
+			idx = -1;
+	}
+	sqlite3_finalize(stmt);
+	return idx;
+}
+
+void FreeMessageFields(YampMessage* msg) {
+	if (!msg) return;
+	free(msg->content);
+	msg->content = NULL;
+	if (msg->reply) {
+		FreeMessageObject(msg->reply);
+		msg->reply = NULL;
+	}
+	for (int i = 0; i < msg->nAttachments; i++)
+		FreeAttachmentTypeFields(&msg->attachments[i]);
+	free(msg->attachments);
+	msg->attachments = NULL;
+	msg->nAttachments = 0;
 }
 
 void FreeMessageObject(YampMessage* msg) {
-	free(msg->content);
-	if (msg->reply)
-		FreeMessageObject(msg->reply);
+	if (!msg) return;
+	FreeMessageFields(msg);
 	free(msg);
 }
-
-YampMessage* CreateMessageTypeFromID(char* id){
-	if(id == NULL){
+YampMessage* CreateMessageTypeFromID(char* id) {
+	if (id == NULL) {
 		return NULL;
 	}
-	const char* sql = "SELECT \"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\",\"channel\" FROM \"messages\" WHERE \"id\" = ?";
+	const char* sql =
+		"SELECT "
+		"\"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\","
+		"\"channel\" FROM \"messages\" WHERE \"id\" = ?";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
-	sqlite3_bind_text(stmt,1,id,-1,SQLITE_STATIC);
-	if(sqlite3_step(stmt)==SQLITE_ROW){
+	sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
 		YampMessage msg = {0};
-		strcpy(msg.author,sqlite3_column_text(stmt, 0));
-		msg.content=sqlite3_column_text(stmt, 1);
-		strcpy(msg.id,sqlite3_column_text(stmt, 2));
+		strcpy(msg.author, sqlite3_column_text(stmt, 0));
+		msg.content = sqlite3_column_text(stmt, 1);
+		strcpy(msg.id, sqlite3_column_text(stmt, 2));
 		msg.type = sqlite3_column_int(stmt, 3);
 		msg.reply = CreateMessageTypeFromID(sqlite3_column_text(stmt, 4));
 		msg.timestamp = sqlite3_column_int(stmt, 5);
-		strcpy(msg.channel,sqlite3_column_text(stmt, 6));
+		YampAttachment* attachments;
+		int nAttachments = ListAttachmentsTypeForMessageID(id, &attachments);
+		msg.attachments = attachments;
+		msg.nAttachments = nAttachments;
+		strcpy(msg.channel, sqlite3_column_text(stmt, 6));
 		YampMessage* heapmsg = AllocMessageType(msg);
 		sqlite3_finalize(stmt);
 		return heapmsg;
-	} else{
+	} else {
 		sqlite3_finalize(stmt);
 	}
 	return NULL;
 }
-int DeleteMessage(char* id){
-	if(id == NULL){
+int DeleteMessage(char* id) {
+	if (id == NULL) {
 		return 0;
 	}
 	const char* sql = "DELETE FROM \"messages\" WHERE \"id\" = ?";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
-	sqlite3_bind_text(stmt,1,id,-1,SQLITE_STATIC);
-	if(sqlite3_step(stmt)==SQLITE_DONE){
+	sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
+	if (sqlite3_step(stmt) == SQLITE_DONE) {
 		sqlite3_finalize(stmt);
 		return 1;
-	} else{
+	} else {
 		sqlite3_finalize(stmt);
 	}
 	return 0;
@@ -972,37 +1071,49 @@ int DeleteMessage(char* id){
 cJSON* CreateMessageObject(YampMessage* msg) {
 	cJSON* object = cJSON_CreateObject();
 	cJSON* author;
-	if(!CreateUserObjectFromID(msg->author,&author)){
+	if (!CreateUserObjectFromID(msg->author, &author)) {
 		return NULL;
 	}
 	cJSON_AddItemToObject(object, "author", author);
 	cJSON_AddStringToObject(object, "content", msg->content);
 	cJSON_AddStringToObject(object, "channel", msg->channel);
-	if(msg->reply){
+	if (msg->reply) {
 		cJSON_AddItemToObject(object, "reply", CreateMessageObject(msg->reply));
 	}
 	cJSON_AddStringToObject(object, "id", msg->id);
 	cJSON_AddNumberToObject(object, "timestamp", msg->timestamp);
-	cJSON_AddNumberToObject(object,"type",msg->type);
+	cJSON_AddNumberToObject(object, "type", msg->type);
+	if (msg->attachments && msg->nAttachments) {
+		cJSON_AddItemToObject(object, "attachments",
+							  ListAttachmentsJSON(msg->id));
+	}
 	return object;
 }
 void InsertMessage(YampMessage* msg) {
-	const char* sql = "INSERT INTO \"messages\" (\"author\",\"content\",\"id\",\"type\",\"reply\",\"timestamp\",\"channel\") VALUES (?, ?, ?, ?, ?, ?, ?)";
+	const char* sql = "INSERT INTO \"messages\" "
+					  "(\"author\",\"content\",\"id\",\"type\",\"reply\","
+					  "\"timestamp\",\"channel\") VALUES (?, ?, ?, ?, ?, ?, ?)";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, msg->author, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 2, msg->content, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 3, msg->id, -1, SQLITE_STATIC);
 	sqlite3_bind_int(stmt, 4, msg->type);
-	if(msg->reply){
+	if (msg->reply) {
 		sqlite3_bind_text(stmt, 5, msg->reply->id, -1, SQLITE_STATIC);
-	} else{
+	} else {
 		sqlite3_bind_null(stmt, 5);
 	}
 	sqlite3_bind_int(stmt, 6, msg->timestamp);
 	sqlite3_bind_text(stmt, 7, msg->channel, -1, SQLITE_STATIC);
 	sqlite3_step(stmt);
 	sqlite3_finalize(stmt);
+
+	if (msg->attachments && msg->nAttachments) {
+		for (int i = 0; i < msg->nAttachments; i++) {
+			InsertAttachmentForMessageID(msg->id, &msg->attachments[i]);
+		}
+	}
 }
 YampChannel CreateDM(char* starter, char* recipient) {
 	const char* sql =
@@ -1059,8 +1170,7 @@ char* JoinUsernames(const user* people, int n) {
 	return out;
 }
 void CreateGC(user creator, int ninitmember, user* initmembers) {
-	const char* sql =
-		"INSERT INTO \"gc\" (\"id\", \"owner\") VALUES (?, ?)";
+	const char* sql = "INSERT INTO \"gc\" (\"id\", \"owner\") VALUES (?, ?)";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	char* id;
@@ -1133,8 +1243,7 @@ int IsInGC(char* uid, char* gcid) {
 	return 0;
 }
 cJSON* ListGCMembersFromID(const char* id) {
-	const char* sql =
-		"SELECT \"user-id\" FROM \"user-gc\" WHERE \"gc-id\" = ?";
+	const char* sql = "SELECT \"user-id\" FROM \"user-gc\" WHERE \"gc-id\" = ?";
 	sqlite3_stmt* stmt;
 
 	cJSON* members = cJSON_CreateArray();
@@ -1161,8 +1270,7 @@ cJSON* ListGCMembersFromID(const char* id) {
 	return members;
 }
 int ListGCMembersTypeFromID(char* id, user** out) {
-	const char* sql =
-		"SELECT \"user-id\" FROM \"user-gc\" WHERE \"gc-id\" = ?";
+	const char* sql = "SELECT \"user-id\" FROM \"user-gc\" WHERE \"gc-id\" = ?";
 	sqlite3_stmt* stmt;
 	*out = NULL;
 	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK)
@@ -1256,8 +1364,12 @@ cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit) {
 		if (reply && *reply)
 			msg.reply = CreateMessageTypeFromID(reply);
 		msg.timestamp = sqlite3_column_int(stmt, 5);
-
+		msg.nAttachments =
+			ListAttachmentsTypeForMessageID((char*)id, &msg.attachments);
 		cJSON* obj = CreateMessageObject(&msg);
+		for (int i = 0; i < msg.nAttachments; i++)
+			FreeAttachmentTypeFields(&msg.attachments[i]);
+		free(msg.attachments);
 		if (!obj) {
 			rc = SQLITE_ERROR;
 			break;
@@ -1301,10 +1413,10 @@ int PushRecvIM(char* toID, char* channel, YampMessage* msg, int nonce) {
 		cJSON* payload = cJSON_CreateObject();
 		Connection con = usr->con;
 		cJSON* message = CreateMessageObject(msg);
-		if(message){
+		if (message) {
 			cJSON_AddItemToObject(payload, "message", message);
 		}
-		if(strcmp(toID,msg->author)==0){
+		if (strcmp(toID, msg->author) == 0) {
 			cJSON_AddNumberToObject(payload, "nonce", nonce);
 		}
 		PushEvent(con, "recvim", payload);
@@ -1458,8 +1570,8 @@ int PushJoinChannel(char* toID, char* fromID, char* channel) {
 		if (!CreateUserObjectFromID(fromID, &user)) {
 			return 0;
 		}
-		cJSON_AddItemToObject(body,"user",user);
-		cJSON_AddStringToObject(body,"channel_id",channel);
+		cJSON_AddItemToObject(body, "user", user);
+		cJSON_AddStringToObject(body, "channel_id", channel);
 		PushEvent(con, "JoinChannel", body);
 	}
 	return 0;
@@ -1476,8 +1588,8 @@ int PushLeftChannel(char* toID, char* fromID, char* channel) {
 		if (!CreateUserObjectFromID(fromID, &user)) {
 			return 0;
 		}
-		cJSON_AddItemToObject(body,"user",user);
-		cJSON_AddStringToObject(body,"channel_id",channel);
+		cJSON_AddItemToObject(body, "user", user);
+		cJSON_AddStringToObject(body, "channel_id", channel);
 		PushEvent(con, "LeftChannel", body);
 	}
 	return 0;
@@ -1494,8 +1606,8 @@ int PushTyping(char* toID, char* fromID, char* channel) {
 		if (!CreateUserObjectFromID(fromID, &user)) {
 			return 0;
 		}
-		cJSON_AddItemToObject(body,"user",user);
-		cJSON_AddStringToObject(body,"channel_id",channel);
+		cJSON_AddItemToObject(body, "user", user);
+		cJSON_AddStringToObject(body, "channel_id", channel);
 		PushEvent(con, "Typing", body);
 	}
 	return 0;
@@ -1508,7 +1620,7 @@ int PushMessageDeleted(char* toID, char* message) {
 	if (usr) {
 		Connection con = usr->con;
 		cJSON* body = cJSON_CreateObject();
-		cJSON_AddStringToObject(body,"message_id",message);
+		cJSON_AddStringToObject(body, "message_id", message);
 		PushEvent(con, "MessageDeleted", body);
 	}
 	return 0;

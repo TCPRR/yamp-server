@@ -63,9 +63,13 @@ typedef struct YampChannel {
 	int nchildren;
 	int pos;
 	int npeople;
-	char space[17];
-	char parent[17];
+	char* space;
+	char* parent;
 } YampChannel;
+typedef struct{
+	char* url;
+	char* mime;
+} YampAttachment; // ALL HEAPP GUH
 typedef struct YampMessage {
 	char id[16+1];
 	char author[16+1];
@@ -74,4 +78,6 @@ typedef struct YampMessage {
 	char channel[16+1+16+1];
 	char* content;
 	struct YampMessage* reply;
+	YampAttachment* attachments; // damn
+	int nAttachments;
 } YampMessage;

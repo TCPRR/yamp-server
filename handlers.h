@@ -79,9 +79,16 @@ int PushTyping(char* toID, char* fromID, char* channel);
 
 YampMessage* CreateMessageTypeFromID(char* id);
 int DeleteMessage(char* id);
+void FreeMessageFields(YampMessage* msg);
 void FreeMessageObject(YampMessage* msg);
 int PushMessageDeleted(char* toID, char* message);
 
 int CanAccessChat(const user* usr, char* id);
 
 char* GetSpaceFromChannelID(char* channel_id);
+
+
+/* Attachments */
+YampAttachment* ParseAttachmentJSON(cJSON* json);
+void FreeAttachmentTypeFields(YampAttachment* attach);
+YampAttachment* AllocAttachmentType(YampAttachment* attachment);

@@ -481,8 +481,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 			}
 			CreateGC(*usr, validusers, parsed_initmem);
-			
-			for(int i = 0; i<validusers; i++){
+
+			for (int i = 0; i < validusers; i++) {
 				// PushNewConversation(parsed_initmem[0].id, YampChannel conv)
 			}
 			InsertError(responsebuild, 0);
@@ -585,6 +585,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				cJSON_GetObjectItem(PayloadParsed, "reply_id"));
 			int nonce = cJSON_GetNumberValue(
 				cJSON_GetObjectItem(PayloadParsed, "nonce"));
+			cJSON* attachments =
+				cJSON_GetObjectItem(PayloadParsed, "attachments");
 			if (!where) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
@@ -596,22 +598,35 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			chat chatCtx;
 			YAMPProcessWhere(where, fromWho, &chatCtx);
-			if (chatCtx.type >= 40) { // Dirty check for space channels
-				YampMessage msg = {0};
-				strcpy(msg.channel, where);
-				strcpy(msg.author, fromWho);
-				msg.timestamp = time(NULL);
-				msg.type = 0;
-				msg.content = content;
-				if (reply) {
-					msg.reply = CreateMessageTypeFromID(reply);
-					if (!msg.reply) {
-						InsertError(responsebuild, 13);
-						goto finishresp;
+
+			YampMessage msg = {0};
+			strcpy(msg.channel, where);
+			strcpy(msg.author, fromWho);
+			msg.timestamp = time(NULL);
+			msg.type = 0;
+			msg.content = strdup(content);
+			if (reply) {
+				msg.reply = CreateMessageTypeFromID(reply);
+				if (!msg.reply) {
+					InsertError(responsebuild, 13);
+					goto finishresp;
+				}
+			}
+			if (attachments && cJSON_IsArray(attachments)) {
+				for (int i = 0; i < cJSON_GetArraySize(attachments); i++) {
+					YampAttachment* ret = ParseAttachmentJSON(cJSON_GetArrayItem(attachments,i));
+					if (ret) {
+						msg.attachments =
+							realloc(msg.attachments,
+									(msg.nAttachments+1) * sizeof(YampAttachment));
+						msg.attachments[msg.nAttachments] = *ret;
+						msg.nAttachments++;
 					}
 				}
-				GenerateID_Inline(msg.id);
-
+			}
+			GenerateID_Inline(msg.id);
+			InsertMessage(&msg);
+			if (chatCtx.type >= 40) { // Dirty check for space channels
 				int outputLen;
 				char* space_id = GetSpaceFromChannelID(chatCtx.ChannelName);
 				cJSON* start = ListSpaceMembersFromID(space_id);
@@ -621,44 +636,10 @@ int ProcessRequest(char* payload, char** response, int sockid,
 							   where, &msg, nonce);
 				}
 				cJSON_Delete(start);
-
-				InsertMessage(&msg);
-				free(msg.reply); // NULL free is no-op so do not check that
 			} else if (chatCtx.type == YAMP_DM) {
-				YampMessage msg = {0};
-				strcpy(msg.channel, where);
-				strcpy(msg.author, fromWho);
-				msg.timestamp = time(NULL);
-				msg.type = 0;
-				msg.content = content;
-				if (reply) {
-					msg.reply = CreateMessageTypeFromID(reply);
-					if (!msg.reply) {
-						InsertError(responsebuild, 13);
-						goto finishresp;
-					}
-				}
-				GenerateID_Inline(msg.id);
 				PushRecvIM(chatCtx.OtherGuy, where, &msg, nonce);
 				PushRecvIM(fromWho, where, &msg, nonce);
-				InsertMessage(&msg);
-				free(msg.reply); // NULL free is no-op so do not check that
 			} else if (chatCtx.type == YAMP_GC) {
-				YampMessage msg = {0};
-				strcpy(msg.channel, where);
-				strcpy(msg.author, fromWho);
-				msg.timestamp = time(NULL);
-				msg.type = 0;
-				msg.content = content;
-				if (reply) {
-					msg.reply = CreateMessageTypeFromID(reply);
-					if (!msg.reply) {
-						InsertError(responsebuild, 13);
-						goto finishresp;
-					}
-				}
-				GenerateID_Inline(msg.id);
-
 				int outputLen;
 				cJSON* start = ListGCMembersFromID(chatCtx.GC_ID);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
@@ -667,10 +648,9 @@ int ProcessRequest(char* payload, char** response, int sockid,
 							   where, &msg, nonce);
 				}
 				cJSON_Delete(start);
-
-				InsertMessage(&msg);
-				free(msg.reply); // NULL free is no-op so do not check that
 			}
+			FreeMessageFields(&msg);
+			free(msg.reply); // NULL free is no-op so do not check that
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "DeleteMessage") == 0) {
 			user search;
@@ -1334,7 +1314,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "UploadFile") == 0) {
 			UploadToken* tok = RegisterUploadToken();
-			cJSON_AddStringToObject(responsepayload, "upload_token",tok->tok);
+			cJSON_AddStringToObject(responsepayload, "upload_token", tok->tok);
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "JoinChannel") == 0) {
 			user search = {0};
