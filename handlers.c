@@ -124,14 +124,14 @@ int GenerateUploadToken_Inline(char* id) {
 	return 1;
 }
 
-cJSON* CreateUserObject(user* user) {
+cJSON* CreateUserObject(YampUser* user) {
 	cJSON* obj = cJSON_CreateObject();
 
 	cJSON_AddStringToObject(obj, "id", user->id);
 	cJSON_AddStringToObject(obj, "name", user->username);
 	cJSON_AddStringToObject(obj, "display_name", user->displayname);
 	cJSON_AddStringToObject(obj, "description", user->description);
-	cJSON_AddStringToObject(obj, "pfp", user->pfp);
+	cJSON_AddStringToObject(obj, "avatar", user->pfp);
 
 	cJSON* status_obj = cJSON_CreateObject();
 
@@ -151,8 +151,8 @@ cJSON* CreateUserObject(user* user) {
  * @param rawusr The raw cJSON YAMP user
  * @return the final user object
  *******************************************************************************/
-user ParseUserObject(cJSON* rawusr) {
-	user usr;
+YampUser ParseUserObject(cJSON* rawusr) {
+	YampUser usr;
 	strncpy(usr.id, cJSON_GetObjectItem(rawusr, "id")->valuestring, 17);
 	usr.username = dup0(cJSON_GetObjectItem(rawusr, "name")->valuestring);
 	cJSON* rawdisp = cJSON_GetObjectItem(rawusr, "display_name");
@@ -167,7 +167,7 @@ user ParseUserObject(cJSON* rawusr) {
 	} else {
 		usr.description = NULL;
 	}
-	cJSON* rawpfp = cJSON_GetObjectItem(rawusr, "pfp");
+	cJSON* rawpfp = cJSON_GetObjectItem(rawusr, "avatar");
 	if (rawpfp) {
 		usr.pfp = dup0(rawpfp->valuestring);
 	} else {
@@ -222,7 +222,7 @@ char* RegisterUserAccount(char* email, char* name, char* passwd) {
 
 	return ok ? id : 0;
 }
-int UpdateUserProfile(char* id, user newprofile) {
+int UpdateUserProfile(char* id, YampUser newprofile) {
 	const char* sql =
 		"UPDATE users SET display_name=?,pfp=?,description=? WHERE id=?";
 	sqlite3_stmt* stmt;
@@ -307,7 +307,7 @@ int CreateSpaceObjectFromID(char* id, cJSON** output) {
 
 	return 1;
 }
-int CreateUserTypeFromID(const char* id, user* output) {
+int CreateUserTypeFromID(const char* id, YampUser* output) {
 	const char* sql = "SELECT name, display_name, pfp, description "
 					  "FROM users WHERE id = ?";
 
@@ -334,10 +334,10 @@ int CreateUserTypeFromID(const char* id, user* output) {
 
 	sqlite3_finalize(stmt);
 
-	user search = {0};
+	YampUser search = {0};
 	search.username = output->username;
 
-	const user* usr = hashmap_get(UsersByName, &search);
+	const YampUser* usr = hashmap_get(UsersByName, &search);
 
 	if (usr && strcmp(usr->status.status, "offline") != 0)
 		output->status = usr->status;
@@ -348,7 +348,7 @@ int CreateUserTypeFromID(const char* id, user* output) {
 }
 
 int CreateUserObjectFromID(const char* id, cJSON** output) {
-	user u;
+	YampUser u;
 	if (!CreateUserTypeFromID(id, &u))
 		return 0;
 	*output = CreateUserObject(&u);
@@ -492,7 +492,7 @@ int CreateFriendsListFromUserID(const char* id, cJSON** output) {
 	*output = array;
 	return 1;
 }
-static cJSON* CreateMembersArray(cJSON* obj, const user* people, int n) {
+static cJSON* CreateMembersArray(cJSON* obj, const YampUser* people, int n) {
 	cJSON* arr = cJSON_AddArrayToObject(obj, "members");
 	if (!arr)
 		return NULL;
@@ -508,7 +508,7 @@ static cJSON* CreateMembersArray(cJSON* obj, const user* people, int n) {
 }
 
 cJSON* CreateConvObject(const YampChannel* conv) {
-	const user* people = (const user*)(conv + 1);
+	const YampUser* people = (const YampUser*)(conv + 1);
 	char addr_id[2 * 16 + 2];
 	int n;
 
@@ -568,10 +568,10 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 	int rc;
 
 	// dms always have 2 people so we can just use that fixed
-	conv = calloc(1, sizeof *conv + 2 * sizeof(user));
+	conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser));
 	if (!conv)
 		goto fail;
-	user* dm_people = (user*)(conv + 1);
+	YampUser* dm_people = (YampUser*)(conv + 1);
 
 	if (sqlite3_prepare_v2(DB, dm_sql, -1, &st, NULL) != SQLITE_OK)
 		goto fail;
@@ -586,7 +586,7 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 		conv->type = YAMP_DM;
 		conv->npeople = 2;
 
-		memset(dm_people, 0, 2 * sizeof(user));
+		memset(dm_people, 0, 2 * sizeof(YampUser));
 		if (CreateUserTypeFromID(a, &dm_people[0]) &&
 			CreateUserTypeFromID(b, &dm_people[1])) {
 			cJSON* obj = CreateConvObject(conv);
@@ -613,7 +613,7 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 			continue;
 
 		size_t cap = 8;
-		conv = calloc(1, sizeof *conv + cap * sizeof(user));
+		conv = calloc(1, sizeof *conv + cap * sizeof(YampUser));
 		if (!conv)
 			goto fail;
 		conv->type = YAMP_GC;
@@ -632,12 +632,12 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 			if ((size_t)n == cap) {
 				cap *= 2;
 				YampChannel* grown =
-					realloc(conv, sizeof *conv + cap * sizeof(user));
+					realloc(conv, sizeof *conv + cap * sizeof(YampUser));
 				if (!grown)
 					goto fail;
 				conv = grown;
 			}
-			user* people = (user*)(conv + 1);
+			YampUser* people = (YampUser*)(conv + 1);
 			if (CreateUserTypeFromID(uid, &people[n]))
 				n++;
 		}
@@ -827,7 +827,7 @@ cJSON* ListSpaceMembersFromID(char* id) {
 	sqlite3_finalize(stmt);
 	return members;
 }
-int CanAccessChat(const user* usr, char* id) {
+int CanAccessChat(const YampUser* usr, char* id) {
 	chat cchat;
 	int ok = YAMPProcessWhere(id, usr->id, &cchat);
 	if (!ok) {
@@ -845,7 +845,7 @@ int CanAccessChat(const user* usr, char* id) {
 		return 0;
 	}
 }
-int ListSpaceMembersTypeFromID(char* id, user** out) {
+int ListSpaceMembersTypeFromID(char* id, YampUser** out) {
 	const char* sql =
 		"SELECT \"user-id\" FROM \"user-space\" WHERE \"space-id\" = ?";
 	sqlite3_stmt* stmt;
@@ -861,7 +861,7 @@ int ListSpaceMembersTypeFromID(char* id, user** out) {
 			continue;
 		if (n == cap) {
 			cap = cap ? cap * 2 : 8;
-			user* g = realloc(*out, cap * sizeof(user));
+			YampUser* g = realloc(*out, cap * sizeof(YampUser));
 			if (!g) {
 				for (int i = 0; i < n; i++)
 					FreeUserFields(&(*out)[i]);
@@ -918,7 +918,8 @@ YampMessage* AllocMessageType(YampMessage msg) {
 	return heapmsg;
 }
 int ListAttachmentsTypeForMessageID(char* msg_id, YampAttachment** out) {
-	const char* sql = "SELECT url,mime FROM attachments WHERE \"msg-id\"=? ORDER BY idx";
+	const char* sql = "SELECT url,mime,filename FROM attachments WHERE "
+					  "\"msg-id\"=? ORDER BY idx";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, msg_id, -1, SQLITE_STATIC);
@@ -931,6 +932,9 @@ int ListAttachmentsTypeForMessageID(char* msg_id, YampAttachment** out) {
 		YampAttachment attachement;
 		attachement.url = dup0(sqlite3_column_text(stmt, 0));
 		attachement.mime = dup0(sqlite3_column_text(stmt, 1));
+		attachement.filename =
+			dup0(sqlite3_column_text(stmt, 2) ? sqlite3_column_text(stmt, 2)
+											  : sqlite3_column_text(stmt, 0));
 		attachements[nAttachements] = attachement;
 		nAttachements++;
 	}
@@ -942,6 +946,7 @@ cJSON* CreateAttachmentJSON(YampAttachment* attachment) {
 	cJSON* obj = cJSON_CreateObject();
 	cJSON_AddStringToObject(obj, "url", attachment->url);
 	cJSON_AddStringToObject(obj, "mime", attachment->mime);
+	cJSON_AddStringToObject(obj, "filename", attachment->filename);
 	return obj; // very meowsome
 }
 YampAttachment* AllocAttachmentType(YampAttachment* attachment) {
@@ -949,11 +954,13 @@ YampAttachment* AllocAttachmentType(YampAttachment* attachment) {
 	*ret = *attachment;
 	ret->url = dup0(attachment->url);
 	ret->mime = dup0(attachment->mime);
+	ret->filename = dup0(attachment->filename);
 	return ret;
 }
 void FreeAttachmentTypeFields(YampAttachment* attach) {
 	free(attach->url);
 	free(attach->mime);
+	free(attach->filename);
 }
 void FreeAttachmentObject(YampAttachment* attach) {
 	FreeAttachmentTypeFields(attach);
@@ -961,9 +968,16 @@ void FreeAttachmentObject(YampAttachment* attach) {
 }
 YampAttachment* ParseAttachmentJSON(cJSON* json) {
 	const char* mime = cJSON_GetStringValue(cJSON_GetObjectItem(json, "mime"));
-	const char* url  = cJSON_GetStringValue(cJSON_GetObjectItem(json, "url"));
-	if (!mime || !url) return NULL;
-	YampAttachment tmp = { .mime = (char*)mime, .url = (char*)url };
+	const char* url = cJSON_GetStringValue(cJSON_GetObjectItem(json, "url"));
+	const char* filename =
+		cJSON_GetStringValue(cJSON_GetObjectItem(json, "filename"));
+	if (!filename) {
+		filename = url;
+	}
+	if (!mime || !url)
+		return NULL;
+	YampAttachment tmp = {
+		.mime = (char*)mime, .url = (char*)url, .filename = (char*)filename};
 	return AllocAttachmentType(&tmp);
 }
 cJSON* ListAttachmentsJSON(char* msg_id) {
@@ -978,10 +992,11 @@ cJSON* ListAttachmentsJSON(char* msg_id) {
 	return arr;
 }
 int InsertAttachmentForMessageID(char* msg_id, YampAttachment* att) {
-	const char* sql = "INSERT INTO attachments(\"msg-id\",url,idx,mime) "
-					  "VALUES(?1,?2,(SELECT COALESCE(MAX(idx)+1,0) FROM "
-					  "attachments WHERE \"msg-id\"=?1),?3) "
-					  "RETURNING idx";
+	const char* sql =
+		"INSERT INTO attachments(\"msg-id\",url,idx,mime,filename) "
+		"VALUES(?1,?2,(SELECT COALESCE(MAX(idx)+1,0) FROM "
+		"attachments WHERE \"msg-id\"=?1),?3, ?4) "
+		"RETURNING idx";
 	sqlite3_stmt* stmt;
 	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK)
 		return -1;
@@ -989,6 +1004,7 @@ int InsertAttachmentForMessageID(char* msg_id, YampAttachment* att) {
 	sqlite3_bind_text(stmt, 1, msg_id, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 2, att->url, -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 3, att->mime, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 4, att->filename, -1, SQLITE_STATIC);
 
 	int idx = -1;
 	if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -1001,7 +1017,8 @@ int InsertAttachmentForMessageID(char* msg_id, YampAttachment* att) {
 }
 
 void FreeMessageFields(YampMessage* msg) {
-	if (!msg) return;
+	if (!msg)
+		return;
 	free(msg->content);
 	msg->content = NULL;
 	if (msg->reply) {
@@ -1016,7 +1033,8 @@ void FreeMessageFields(YampMessage* msg) {
 }
 
 void FreeMessageObject(YampMessage* msg) {
-	if (!msg) return;
+	if (!msg)
+		return;
 	FreeMessageFields(msg);
 	free(msg);
 }
@@ -1142,7 +1160,7 @@ int HasDMs(char* starter, char* recipient) {
 	sqlite3_finalize(stmt);
 	return 0;
 }
-char* JoinUsernames(const user* people, int n) {
+char* JoinUsernames(const YampUser* people, int n) {
 	size_t len = 1;
 	for (int i = 0; i < n; i++) {
 		const char* nm =
@@ -1169,7 +1187,7 @@ char* JoinUsernames(const user* people, int n) {
 	*p = '\0';
 	return out;
 }
-void CreateGC(user creator, int ninitmember, user* initmembers) {
+void CreateGC(YampUser creator, int ninitmember, YampUser* initmembers) {
 	const char* sql = "INSERT INTO \"gc\" (\"id\", \"owner\") VALUES (?, ?)";
 	sqlite3_stmt* stmt;
 	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
@@ -1183,7 +1201,7 @@ void CreateGC(user creator, int ninitmember, user* initmembers) {
 	sqlite3_finalize(stmt);
 
 	for (int i = 0; i < ninitmember + 1; i++) {
-		user usr = i == 0 ? creator : initmembers[i - 1];
+		YampUser usr = i == 0 ? creator : initmembers[i - 1];
 		const char* memsql =
 			"INSERT INTO \"user-gc\" (\"user-id\", \"gc-id\") VALUES (?, ?)";
 		sqlite3_stmt* memstmt;
@@ -1269,7 +1287,7 @@ cJSON* ListGCMembersFromID(const char* id) {
 	sqlite3_finalize(stmt);
 	return members;
 }
-int ListGCMembersTypeFromID(char* id, user** out) {
+int ListGCMembersTypeFromID(char* id, YampUser** out) {
 	const char* sql = "SELECT \"user-id\" FROM \"user-gc\" WHERE \"gc-id\" = ?";
 	sqlite3_stmt* stmt;
 	*out = NULL;
@@ -1284,7 +1302,7 @@ int ListGCMembersTypeFromID(char* id, user** out) {
 			continue;
 		if (n == cap) {
 			cap = cap ? cap * 2 : 8;
-			user* g = realloc(*out, cap * sizeof(user));
+			YampUser* g = realloc(*out, cap * sizeof(YampUser));
 			if (!g) {
 				for (int i = 0; i < n; i++)
 					FreeUserFields(&(*out)[i]);
@@ -1402,99 +1420,66 @@ int PushEvent(Connection con, char* event, cJSON* data) {
 			YAMPSend(con.fd, out, strlen(out));
 		}
 		free(out);
+		return 1;
 	}
-	cJSON_Delete(payload);
+	return 0;
+}
+int PushEventToUser(char* toID, char* event, cJSON* data) {
+	YampUser search;
+	strcpy(search.id, toID);
+	const YampUser* usr = hashmap_get(UsersByID, &search);
+	if (usr) {
+		UserSession* ses = usr->sessions;
+		int ret = 1;
+		while (ses) {
+			ret = ret && PushEvent(ses->con, event, data);
+			ses = ses->next;
+		}
+		return ret;
+	}
+	cJSON_Delete(data);
+	return 0;
 }
 int PushRecvIM(char* toID, char* channel, YampMessage* msg, int nonce) {
-	user search;
-	strcpy(search.id, toID);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		cJSON* payload = cJSON_CreateObject();
-		Connection con = usr->con;
-		cJSON* message = CreateMessageObject(msg);
-		if (message) {
-			cJSON_AddItemToObject(payload, "message", message);
-		}
-		if (strcmp(toID, msg->author) == 0) {
-			cJSON_AddNumberToObject(payload, "nonce", nonce);
-		}
-		PushEvent(con, "recvim", payload);
-		return 1;
-	} else {
-		printf("a message was canceled due to the other side being offline!\n");
+	cJSON* payload = cJSON_CreateObject();
+	cJSON* message = CreateMessageObject(msg);
+	if (message) {
+		cJSON_AddItemToObject(payload, "message", message);
 	}
+	if (strcmp(toID, msg->author) == 0) {
+		cJSON_AddNumberToObject(payload, "nonce", nonce);
+	}
+	PushEventToUser(toID, "recvim", payload);
 	return 0;
 }
-/********************************************************************
- * Pushes a friend req event
- * @param toID The ID of the user to send to
- * @param fromID The ID this comes from
- ********************************************************************/
+
 int PushFQ(char* toID, char* fromID) {
 	cJSON* payload = cJSON_CreateObject();
-	user search;
-	strcpy(search.id, toID);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		printf("Pushing an fq event to %s at %d\n", toID, con.fd);
-		cJSON_AddStringToObject(payload, "from", fromID);
-		PushEvent(con, "IncomingFriendReq", payload);
-	} else {
-		printf(
-			"a friend req was omitted due to the other side being offline!\n");
-	}
-	return 1;
+	cJSON_AddStringToObject(payload, "from", fromID);
+	return PushEventToUser(toID, "IncomingFriendReq", payload);
 }
-int PushStatusUpdate(char* toWho, char* who, status status) {
-	cJSON* payload = cJSON_CreateObject();
-	user search;
-	strcpy(search.id, toWho);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		printf(
-			"Pushing a status update event to %s at %d, with the status %s\n",
-			toWho, con.fd, status.status);
-		cJSON* stat = cJSON_CreateObject();
-		cJSON_AddStringToObject(stat, "status", status.status);
-		cJSON_AddStringToObject(stat, "RPCDesc", status.RPCDesc);
-		cJSON_AddStringToObject(stat, "RPCIcon", status.RPCIcon);
-		cJSON_AddStringToObject(stat, "RPCName", status.RPCName);
-		cJSON_AddStringToObject(payload, "user", who);
-		cJSON_AddItemToObject(payload, "status", stat);
-		PushEvent(con, "StatusUpdate", payload);
-		return 1;
-	} else {
-		printf("a status update msg was canceled due to the other side being "
-			   "offline!\n");
-	}
-	return 0;
-}
-int PushNewSpace(char* who, char* space_id) {
-	user search;
-	strcpy(search.id, who);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body;
-		int ok = CreateSpaceObjectFromID(space_id, &body);
-		if (!ok) {
-			return 0;
-		}
-		PushEvent(con, "NewSpace", body);
-		return 1;
-	}
-	return 0;
-}
-int PushUpdatedChannelsList(char* who, char* space_id) {
-	user search;
-	strcpy(search.id, who);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (!usr)
-		return 0;
 
+int PushStatusUpdate(char* toWho, char* who, status status) {
+	cJSON* stat = cJSON_CreateObject();
+	cJSON_AddStringToObject(stat, "status", status.status);
+	cJSON_AddStringToObject(stat, "RPCDesc", status.RPCDesc);
+	cJSON_AddStringToObject(stat, "RPCIcon", status.RPCIcon);
+	cJSON_AddStringToObject(stat, "RPCName", status.RPCName);
+
+	cJSON* payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "user", who);
+	cJSON_AddItemToObject(payload, "status", stat);
+	return PushEventToUser(toWho, "StatusUpdate", payload);
+}
+
+int PushNewSpace(char* who, char* space_id) {
+	cJSON* body = NULL;
+	if (!CreateSpaceObjectFromID(space_id, &body))
+		return 0;
+	return PushEventToUser(who, "NewSpace", body);
+}
+
+int PushUpdatedChannelsList(char* who, char* space_id) {
 	cJSON* channellist = NULL;
 	if (!CreateChannelsListFromName(space_id, &channellist))
 		return 0;
@@ -1502,129 +1487,62 @@ int PushUpdatedChannelsList(char* who, char* space_id) {
 	cJSON* body = cJSON_CreateObject();
 	cJSON_AddItemToObject(body, "channels", channellist);
 	cJSON_AddStringToObject(body, "space", space_id);
-	PushEvent(usr->con, "UpdatedChannels",
-			  body); // PushEvent takes ownership of body
-	return 1;
+	return PushEventToUser(who, "UpdatedChannels", body);
 }
+
 int PushNewFriend(char* who, char* user_id) {
-	user search;
-	strcpy(search.id, who);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body;
-		int ok = CreateUserObjectFromID(user_id, &body);
-		if (!ok) {
-			return 0;
-		}
-		PushEvent(con, "NewFriend", body);
-		return 1;
-	}
-	return 0;
+	cJSON* body = NULL;
+	if (!CreateUserObjectFromID(user_id, &body))
+		return 0;
+	return PushEventToUser(who, "NewFriend", body);
 }
+
 int PushNewConversation(char* userid, YampChannel conv) {
-	user search;
-	strcpy(search.id, userid);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body;
-		int ok = CreateUserObjectFromID(userid, &body);
-		if (!ok) {
-			return 0;
-		}
-		PushEvent(con, "NewConversation", body);
-		return 1;
-	}
-	return 0;
+	cJSON* body = NULL;
+	if (!CreateUserObjectFromID(userid, &body))   // see note below
+		return 0;
+	return PushEventToUser(userid, "NewConversation", body);
 }
-/********************************************************************
- * Pushes a profile update event
- * @param toID The ID of the user to send to
- * @param fromID The ID of the user that just updated
- ********************************************************************/
+
 int PushProfileUpdate(char* fromID, char* toID) {
-	user search;
-	strcpy(search.id, toID);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body;
-		if (!CreateUserObjectFromID(fromID, &body)) {
-			return 0;
-		}
-		PushEvent(con, "ProfileUpdate", body);
-		return 1;
-	}
-	return 0;
+	cJSON* body = NULL;
+	if (!CreateUserObjectFromID(fromID, &body))
+		return 0;
+	return PushEventToUser(toID, "ProfileUpdate", body);
 }
+
+// Shared by JoinChannel / LeftChannel / Typing, which have identical payloads
+static int PushUserChannelEvent(char* toID, char* fromID, char* channel,
+								const char* event) {
+	cJSON* user = NULL;
+	if (!CreateUserObjectFromID(fromID, &user))
+		return 0;
+
+	cJSON* body = cJSON_CreateObject();
+	cJSON_AddItemToObject(body, "user", user);
+	cJSON_AddStringToObject(body, "channel_id", channel);
+	return PushEventToUser(toID, event, body);
+}
+
 int PushJoinChannel(char* toID, char* fromID, char* channel) {
-	cJSON* payload = cJSON_CreateObject();
-	user search;
-	strcpy(search.id, toID);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body = cJSON_CreateObject();
-		cJSON* user;
-		if (!CreateUserObjectFromID(fromID, &user)) {
-			return 0;
-		}
-		cJSON_AddItemToObject(body, "user", user);
-		cJSON_AddStringToObject(body, "channel_id", channel);
-		PushEvent(con, "JoinChannel", body);
-	}
-	return 0;
+	return PushUserChannelEvent(toID, fromID, channel, "JoinChannel");
 }
 int PushLeftChannel(char* toID, char* fromID, char* channel) {
-	cJSON* payload = cJSON_CreateObject();
-	user search;
-	strcpy(search.id, toID);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body = cJSON_CreateObject();
-		cJSON* user;
-		if (!CreateUserObjectFromID(fromID, &user)) {
-			return 0;
-		}
-		cJSON_AddItemToObject(body, "user", user);
-		cJSON_AddStringToObject(body, "channel_id", channel);
-		PushEvent(con, "LeftChannel", body);
-	}
-	return 0;
+	return PushUserChannelEvent(toID, fromID, channel, "LeftChannel");
 }
 int PushTyping(char* toID, char* fromID, char* channel) {
-	cJSON* payload = cJSON_CreateObject();
-	user search;
-	strcpy(search.id, toID);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body = cJSON_CreateObject();
-		cJSON* user;
-		if (!CreateUserObjectFromID(fromID, &user)) {
-			return 0;
-		}
-		cJSON_AddItemToObject(body, "user", user);
-		cJSON_AddStringToObject(body, "channel_id", channel);
-		PushEvent(con, "Typing", body);
-	}
-	return 0;
+	return PushUserChannelEvent(toID, fromID, channel, "Typing");
 }
+
 int PushMessageDeleted(char* toID, char* message) {
-	cJSON* payload = cJSON_CreateObject();
-	user search;
-	strcpy(search.id, toID);
-	const user* usr = hashmap_get(UsersByID, &search);
-	if (usr) {
-		Connection con = usr->con;
-		cJSON* body = cJSON_CreateObject();
-		cJSON_AddStringToObject(body, "message_id", message);
-		PushEvent(con, "MessageDeleted", body);
-	}
-	return 0;
+	cJSON* body = cJSON_CreateObject();
+	cJSON_AddStringToObject(body, "message_id", message);
+	return PushEventToUser(toID, "MessageDeleted", body);
 }
+
+
+
+
 void CreateFriendship(char* sender, char* accepter) {
 	sqlite3_stmt* stmt;
 	char* query = "INSERT INTO \"friendship\" (sender,accepter) VALUES (?,?)";

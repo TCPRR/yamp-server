@@ -1,3 +1,15 @@
-CFLAGS = -DOPENSSL_API_3_0 -fsanitize=address,undefined
-yampd: main.c request.c handlers.c globals.c
-	gcc -g -O0 $(CFLAGS) -fno-omit-frame-pointer -Iext/civetweb/include -I/usr/include/glib-2.0 -I/usr/lib64/glib-2.0/include -I/usr/include/sysprof-6 -pthread *.c hmap/*.c ext/civetweb/src/civetweb.c -lcjson -lcurl -lsqlite3 -lcrypto -lssl -lglib-2.0 -o yampd
+CC = gcc
+CFLAGS = -DOPENSSL_API_3_0 -fsanitize=address,undefined -g -O0 -fno-omit-frame-pointer
+CFLAGS += -Iext/civetweb/include -pthread
+CFLAGS += $(shell pkg-config --cflags glib-2.0)
+
+LDLIBS = -lcjson -lcurl -lsqlite3 -lcrypto -lssl
+LDLIBS += $(shell pkg-config --libs glib-2.0)
+
+SOURCES = main.c network.c request.c handlers.c globals.c helpers.c http.c hmap/*.c ext/civetweb/src/civetweb.c
+
+yampd: $(SOURCES)
+	$(CC) $(CFLAGS) $(SOURCES) $(LDLIBS) -o yampd
+
+clean:
+	rm -f yampd

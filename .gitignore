@@ -2,3 +2,4 @@ yamp.db
 yamp-server
 config.h
 push.sh
+yampd

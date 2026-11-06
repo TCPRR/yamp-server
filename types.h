@@ -1,11 +1,20 @@
 #pragma once
 #include <openssl/ssl.h>
-#define YAMP_DM 0
-#define YAMP_GC 1
-#define YAMP_SPACE_TEXT 40
-#define YAMP_SPACE_CATEGORY 41
-#define YAMP_SPACE_ANNOUNCEMENT 42
-#define YAMP_SPACE_INDEX 43
+
+#define YAMP_DM                 0
+#define YAMP_GC                 1
+
+#define YAMP_FAMILY_SPACE       (1 << 8)
+#define YAMP_FAMILY_MASK        0xFF00
+#define YAMP_SUBTYPE_MASK       0x00FF
+
+#define YAMP_SPACE_TEXT         (YAMP_FAMILY_SPACE | 0)
+#define YAMP_SPACE_CATEGORY     (YAMP_FAMILY_SPACE | 1)
+#define YAMP_SPACE_ANNOUNCEMENT (YAMP_FAMILY_SPACE | 2)
+#define YAMP_SPACE_INDEX        (YAMP_FAMILY_SPACE | 3)
+
+#define YAMP_IS_SPACE_TYPE(t)   (((t) & YAMP_FAMILY_MASK) == YAMP_FAMILY_SPACE)
+
 // TODO: finish deprecating the type chat for the type YampChannel EVERYWHERE
 typedef struct {
 	char type; // 0 = DM, 1 = Space Channel
@@ -31,8 +40,19 @@ typedef struct {
 	unsigned long long LastEndpoint;
 	int ratelimited;
 } Connection;
-typedef struct {
+
+typedef struct YampUser YampUser;
+typedef struct UserSession UserSession;
+struct UserSession{
 	Connection con;
+	int device_type;
+	char* device;
+	char* token;
+	YampUser* user;
+	struct UserSession* prev;
+	struct UserSession* next; // making this a doubly-linked list item too
+};
+struct YampUser {
 	char id[17];
 	char *username;
 	char* displayname;
@@ -41,7 +61,10 @@ typedef struct {
 	status status;
 	int isTyping;
 	char typingAt[34];
-} user;
+	char* banner;
+	UserSession* sessions;
+};
+
 typedef struct {
 	char id[17];
 	char* name;
@@ -69,6 +92,7 @@ typedef struct YampChannel {
 typedef struct{
 	char* url;
 	char* mime;
+	char* filename;
 } YampAttachment; // ALL HEAPP GUH
 typedef struct YampMessage {
 	char id[16+1];

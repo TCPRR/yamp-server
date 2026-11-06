@@ -188,9 +188,7 @@ void DisconnectClient(int i) {
 	Connection* c = &client_sockets[i];
 	int sd = c->fd;
 
-	user search;
-	search.con = *c;
-	user* usr = hashmap_get(UsersByFD, &search);
+	YampUser* usr = FindUserByFD(sd);
 	if (usr) {
 		int cnt;
 		char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
@@ -200,7 +198,11 @@ void DisconnectClient(int i) {
 		}
 		hashmap_delete(UsersByID, usr);
 		hashmap_delete(UsersByName, usr);
-		hashmap_delete(UsersByFD, usr);
+		UserSession* ses = usr->sessions;
+		while (ses){
+			hashmap_delete(UserSessionsByFD, ses); // hashmaps callback frees the elements
+			ses = ses->next;
+		}
 	}
 
 	epoll_ctl(epfd, EPOLL_CTL_DEL, sd, NULL);
@@ -213,12 +215,12 @@ void DisconnectClient(int i) {
 }
 
 int main() {
-	UsersByName = hashmap_new(sizeof(user), 256, 0, 0, hmap_username_hash,
+	UsersByName = hashmap_new(sizeof(YampUser), 256, 0, 0, hmap_username_hash,
 							  hmap_username_compare, hmap_username_free, NULL);
-	UsersByID = hashmap_new(sizeof(user), 256, 0, 0, hmap_userid_hash,
+	UsersByID = hashmap_new(sizeof(YampUser), 256, 0, 0, hmap_userid_hash,
 							hmap_userid_compare, hmap_userid_free, NULL);
-	UsersByFD = hashmap_new(sizeof(user), 256, 0, 0, hmap_userfd_hash,
-							hmap_userfd_compare, hmap_userfd_free, NULL);
+	UserSessionsByFD = hashmap_new(sizeof(UserSession), 256, 0, 0, hmap_session_hash,
+							hmap_session_compare, hmap_session_free, NULL);
 
 	sqlite3_open("yamp.db", &DB);
 	int db_init_fd = open("yamp.db.sql", O_RDONLY);

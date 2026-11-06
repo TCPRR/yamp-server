@@ -50,36 +50,43 @@ int YAMPProcessWhere(char* where, char* curUserID, chat* out) {
 	}
 }
 uint64_t hmap_username_hash(const void* item, uint64_t seed0, uint64_t seed1) {
-	return hashmap_sip(((user*)item)->username, strlen(((user*)item)->username),
+	return hashmap_sip(((YampUser*)item)->username, strlen(((YampUser*)item)->username),
 					   seed0, seed1);
 }
 int hmap_username_compare(const void* a, const void* b, void* udata) {
-	return strcmp(((const user*)a)->username, ((const user*)b)->username);
+	return strcmp(((const YampUser*)a)->username, ((const YampUser*)b)->username);
 }
 uint64_t hmap_userid_hash(const void* item, uint64_t seed0, uint64_t seed1) {
-	return hashmap_sip(((user*)item)->id, strlen(((user*)item)->id), seed0,
+	return hashmap_sip(((YampUser*)item)->id, strlen(((YampUser*)item)->id), seed0,
 					   seed1);
 }
 int hmap_userid_compare(const void* a, const void* b, void* udata) {
-	return strcmp(((const user*)a)->id, ((const user*)b)->id);
+	return strcmp(((const YampUser*)a)->id, ((const YampUser*)b)->id);
 }
 void hmap_username_free(void* item) {}
 void hmap_userid_free(void* item) {}
 
-uint64_t hmap_userfd_hash(const void* item, uint64_t seed0, uint64_t seed1) {
-	int fd = ((user*)item)->con.fd;
-	return hashmap_sip(&fd, sizeof(fd), seed0, seed1);
+uint64_t hmap_session_hash(const void* item, uint64_t seed0, uint64_t seed1) {
+	const UserSession* s = item;
+	return hashmap_sip(&s->con.fd, sizeof s->con.fd, seed0, seed1);
 }
-int hmap_userfd_compare(const void* a, const void* b, void* udata) {
-	if (((const user*)a)->con.fd == ((const user*)b)->con.fd) {
-		return 0;
-	} else if (((const user*)a)->con.fd < ((const user*)b)->con.fd) {
-		return -1;
-	} else {
-		return 1;
-	}
+int hmap_session_compare(const void* a, const void* b, void* udata) {
+	int fa = ((const UserSession*)a)->con.fd;
+	int fb = ((const UserSession*)b)->con.fd;
+	return (fa > fb) - (fa < fb);
 }
-void hmap_userfd_free(void* item) {}
+void hmap_session_free(void* item) {}
+
+UserSession* FindSessionByFD(int fd) {
+	UserSession key = {0};
+	key.con.fd = fd;
+	return hashmap_get(UserSessionsByFD, &key);
+}
+
+YampUser* FindUserByFD(int fd) {
+	UserSession* s = FindSessionByFD(fd);
+	return s ? s->user : NULL;
+}
 
 char* MakeDMChannel(const char* a, const char* b) {
 	if (strcmp(a, b) < 0)
@@ -103,7 +110,7 @@ void sha256_hex(const char* input, char* output_hex) {
 
 char* dup0(const char* s) { return strdup(s ? (const char*)s : ""); }
 
-void FreeUserFields(user* u) {
+void FreeUserFields(YampUser* u) {
 	free(u->username);
 	free(u->displayname);
 	free(u->pfp);
@@ -113,7 +120,7 @@ void FreeUserFields(user* u) {
 void FreeYampChannel(YampChannel* ch) {
 	if (!ch)
 		return;
-	user* people = (user*)(ch + 1);
+	YampUser* people = (YampUser*)(ch + 1);
 	for (int i = 0; i < ch->npeople; i++)
 		FreeUserFields(&people[i]);
 	free(ch->name);
@@ -191,10 +198,10 @@ YampChannel* GetDMFromAddress(const char* addr) {
 	if (!HasDMs(a, b))
 		return NULL;
 
-	YampChannel* conv = calloc(1, sizeof *conv + 2 * sizeof(user));
+	YampChannel* conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser));
 	if (!conv)
 		return NULL;
-	user* people = (user*)(conv + 1);
+	YampUser* people = (YampUser*)(conv + 1);
 
 	conv->type = YAMP_DM;
 	if (!CreateUserTypeFromID(a, &people[0])) {
@@ -230,7 +237,7 @@ YampChannel* GetGCFromID(const char* gid) {
 	st = NULL;
 
 	size_t cap = 8;
-	conv = calloc(1, sizeof *conv + cap * sizeof(user));
+	conv = calloc(1, sizeof *conv + cap * sizeof(YampUser));
 	if (!conv) {
 		free(name);
 		return NULL;
@@ -255,7 +262,7 @@ YampChannel* GetGCFromID(const char* gid) {
 		if ((size_t)n_people == cap) {
 			cap *= 2;
 			YampChannel* grown =
-				realloc(conv, sizeof *conv + cap * sizeof(user));
+				realloc(conv, sizeof *conv + cap * sizeof(YampUser));
 			if (!grown) {
 				sqlite3_finalize(st);
 				FreeYampChannel(conv);
@@ -263,7 +270,7 @@ YampChannel* GetGCFromID(const char* gid) {
 			}
 			conv = grown;
 		}
-		user* people = (user*)(conv + 1);
+		YampUser* people = (YampUser*)(conv + 1);
 		if (CreateUserTypeFromID(uid, &people[n_people])) {
 			n_people++;
 			conv->npeople = n_people; /* keep in sync for cleanup */

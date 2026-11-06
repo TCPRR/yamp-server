@@ -17,7 +17,7 @@ int GenerateUploadToken_Inline(char* id);
 
 // Functions
 char* RegisterUserAccount(char* email, char* name, char* passwd);
-cJSON *CreateUserObject(user *user);
+cJSON *CreateUserObject(YampUser *user);
 int CreateSpaceObjectFromName(char *name, cJSON **output);
 int CreateSpaceObjectFromID(char* id, cJSON** output);
 int CreateUserObjectFromUsername(const char *name, cJSON **output);
@@ -30,7 +30,7 @@ int CreateUsersOwnObjectFromUsername(char *name, cJSON **output);
 char* CreateSpaceInvite(const char* space, int uses);
 cJSON* GetSpaceDetailsFromInvite(const char* invite);
 cJSON* ListSpaceMembersFromID(char* id);
-int ListSpaceMembersTypeFromID(char* id, user** out);
+int ListSpaceMembersTypeFromID(char* id, YampUser** out);
 cJSON* CreateMessageObject(YampMessage* msg);
 void InsertMessage(YampMessage* msg);
 cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit);
@@ -53,23 +53,23 @@ char* GetUserIDFromName(char* name);
 int PushNewSpace(char* who, char* space_id);
 int PushUpdatedChannelsList(char* who, char* space_id);
 int PushNewFriend(char* who, char* user_id);
-user ParseUserObject(cJSON* rawusr);
-int UpdateUserProfile(char* id, user newprofile);
+YampUser ParseUserObject(cJSON* rawusr);
+int UpdateUserProfile(char* id, YampUser newprofile);
 
 int PushNewConversation(char* userid, YampChannel conv);
 
-void CreateGC(user creator, int ninitmember, user* initmembers);
+void CreateGC(YampUser creator, int ninitmember, YampUser* initmembers);
 int UpdateGC(YampChannel* conv);
 int IsGCOwner(char* uid, char* gcid);
 int IsInGC(char* uid, char* gcid);
 cJSON* ListGCMembersFromID(const char* id);
-int ListGCMembersTypeFromID(char* id, user** out);
+int ListGCMembersTypeFromID(char* id, YampUser** out);
 int AddMemberToGC(char* uid, char* gcid);
 
 YampChannel CreateDM(char* starter, char* recipient);
 int HasDMs(char* starter, char* recipient);
 
-int CreateUserTypeFromID(const char* id, user* output);
+int CreateUserTypeFromID(const char* id, YampUser* output);
 int CreateUsersOwnObjectFromID(char* name, cJSON** output);
 
 
@@ -83,7 +83,7 @@ void FreeMessageFields(YampMessage* msg);
 void FreeMessageObject(YampMessage* msg);
 int PushMessageDeleted(char* toID, char* message);
 
-int CanAccessChat(const user* usr, char* id);
+int CanAccessChat(const YampUser* usr, char* id);
 
 char* GetSpaceFromChannelID(char* channel_id);
 

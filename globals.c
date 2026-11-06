@@ -1,6 +1,6 @@
 #include "globals.h"
 hmap UsersByName;
-hmap UsersByFD;
+hmap UserSessionsByFD;
 hmap UsersByID;
 
 MainRespOverride* respoverrides = NULL;
