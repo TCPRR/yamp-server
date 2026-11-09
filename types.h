@@ -15,6 +15,10 @@
 
 #define YAMP_IS_SPACE_TYPE(t)   (((t) & YAMP_FAMILY_MASK) == YAMP_FAMILY_SPACE)
 
+
+// ID Fields here are still kept 17 bytes for legacy compat with older DB entries, though modern YAMP uses 13 bytes
+// Doesn't matter anyway, 17 can fit 13
+
 // TODO: finish deprecating the type chat for the type YampChannel EVERYWHERE
 typedef struct {
 	char type; // 0 = DM, 1 = Space Channel
@@ -94,14 +98,23 @@ typedef struct{
 	char* mime;
 	char* filename;
 } YampAttachment; // ALL HEAPP GUH
-typedef struct YampMessage {
+
+typedef struct YampMessage YampMessage;
+typedef struct{
+	char msg_id[17];
+	YampUser* user;
+	char* codepoint;
+} YampReaction;
+struct YampMessage {
 	char id[16+1];
-	char author[16+1];
+	YampUser* author;
 	int type; // for later use
 	uint64_t timestamp;
 	char channel[16+1+16+1];
 	char* content;
 	struct YampMessage* reply;
-	YampAttachment* attachments; // damn
+	YampReaction** reactions;
+	int nReactions;
+	YampAttachment** attachments; // damn
 	int nAttachments;
-} YampMessage;
+};

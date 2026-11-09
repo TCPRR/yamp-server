@@ -14,13 +14,21 @@ int GenerateID_Inline(char* id);
 int GenerateToken_Inline(char* id);
 int GenerateUploadToken_Inline(char* id);
 
+// User Objects
+YampUser* ParseUserJSON(cJSON* rawusr);
+cJSON *CreateUserJSON(YampUser *user);
+int CreateUserJSONFromUsername(const char *name, cJSON **output);
+
+int CreateUserObjectFromID(const char* id, YampUser** output);
+int CreateUserSelfJSONFromID(char* name, cJSON** output);
+int CreateUserSelfJSONFromUsername(char* name, cJSON** output);
+void FreeUserObject(YampUser* u);
+
 
 // Functions
 char* RegisterUserAccount(char* email, char* name, char* passwd);
-cJSON *CreateUserObject(YampUser *user);
 int CreateSpaceObjectFromName(char *name, cJSON **output);
 int CreateSpaceObjectFromID(char* id, cJSON** output);
-int CreateUserObjectFromUsername(const char *name, cJSON **output);
 int CreateFriendsListFromUserID(const char* name, cJSON** output);
 int CreateConvListFromUserID(const char *name, cJSON **output);
 int CreateSpacesListFromID(const char* name, cJSON** output);
@@ -29,8 +37,11 @@ int CreateChannelsListFromName(const char *name, cJSON **output);
 int CreateUsersOwnObjectFromUsername(char *name, cJSON **output);
 char* CreateSpaceInvite(const char* space, int uses);
 cJSON* GetSpaceDetailsFromInvite(const char* invite);
-cJSON* ListSpaceMembersFromID(char* id);
-int ListSpaceMembersTypeFromID(char* id, YampUser** out);
+
+// Member listing funcs
+cJSON* ListSpaceMembersJSONFromID(char* id);
+int ListSpaceMembersObjectsFromID(char* id, YampUser*** out);
+
 cJSON* CreateMessageObject(YampMessage* msg);
 void InsertMessage(YampMessage* msg);
 cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit);
@@ -58,20 +69,18 @@ int UpdateUserProfile(char* id, YampUser newprofile);
 
 int PushNewConversation(char* userid, YampChannel conv);
 
-void CreateGC(YampUser creator, int ninitmember, YampUser* initmembers);
+// Group chat funcs
+void CreateGC(YampUser* creator, int ninitmember, YampUser** initmembers);
 int UpdateGC(YampChannel* conv);
 int IsGCOwner(char* uid, char* gcid);
 int IsInGC(char* uid, char* gcid);
-cJSON* ListGCMembersFromID(const char* id);
-int ListGCMembersTypeFromID(char* id, YampUser** out);
+cJSON* ListGCMembersJSONFromID(const char* id);
+int ListGCMembersObjectsFromID(char* id, YampUser*** out);
+void FreeUserArray(YampUser** arr, int n);
 int AddMemberToGC(char* uid, char* gcid);
 
 YampChannel CreateDM(char* starter, char* recipient);
 int HasDMs(char* starter, char* recipient);
-
-int CreateUserTypeFromID(const char* id, YampUser* output);
-int CreateUsersOwnObjectFromID(char* name, cJSON** output);
-
 
 int PushJoinChannel(char* toID, char* fromID, char* channel);
 int PushLeftChannel(char* toID, char* fromID, char* channel);
@@ -88,7 +97,6 @@ int CanAccessChat(const YampUser* usr, char* id);
 char* GetSpaceFromChannelID(char* channel_id);
 
 
-/* Attachments */
 YampAttachment* ParseAttachmentJSON(cJSON* json);
 void FreeAttachmentTypeFields(YampAttachment* attach);
-YampAttachment* AllocAttachmentType(YampAttachment* attachment);
+YampAttachment* DupAttachmentObject(YampAttachment* attachment);

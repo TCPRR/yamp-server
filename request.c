@@ -86,7 +86,7 @@ char** CollectRelatedUserIDs(const char* username, const char* selfid,
 		cJSON* idj = cJSON_GetObjectItem(cJSON_GetArrayItem(spaces, i), "id");
 		if (!cJSON_IsString(idj))
 			continue;
-		cJSON* members = ListSpaceMembersFromID(idj->valuestring);
+		cJSON* members = ListSpaceMembersJSONFromID(idj->valuestring);
 		for (int j = 0; j < cJSON_GetArraySize(members); j++) {
 			cJSON* mid =
 				cJSON_GetObjectItem(cJSON_GetArrayItem(members, j), "id");
@@ -265,7 +265,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 						cJSON_GetObjectItem(space, "id")->valuestring;
 					cJSON* out;
 					int outputlen;
-					out = ListSpaceMembersFromID(spaceid);
+					out = ListSpaceMembersJSONFromID(spaceid);
 					for (int j = 0; j < cJSON_GetArraySize(out); j++) {
 						cJSON* user = cJSON_GetArrayItem(out, j);
 						int didntMatch = 1;
@@ -309,7 +309,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					PushStatusUpdate(usrlist[i], newUser->id, newUser->status);
 				}
 				cJSON* tmp;
-				CreateUsersOwnObjectFromID(newUser->id, &tmp);
+				CreateUserSelfJSONFromID(newUser->id, &tmp);
 				cJSON_AddItemToObject(responsepayload, "user", tmp);
 				FriendReqEntry* fql = NULL;
 				int c = ListFriendReqs(newUser->id, &fql);
@@ -319,7 +319,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					cJSON_AddArrayToObject(responsepayload, "outgoing_fq");
 				for (int i = 0; i < c; i++) {
 					cJSON* user = NULL;
-					if (CreateUserObjectFromUsername(fql[i].username, &user) &&
+					if (CreateUserJSONFromUsername(fql[i].username, &user) &&
 						user) {
 						if (fql[i].outgoing) {
 							cJSON_AddItemToArray(outfq, user);
@@ -521,20 +521,20 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
-			YampUser* parsed_initmem =
-				malloc(cJSON_GetArraySize(initial_members) * sizeof(YampUser));
+			YampUser** parsed_initmem =
+				malloc(cJSON_GetArraySize(initial_members) * sizeof(YampUser*));
 			int validusers = 0;
 			for (int i = 0; i < cJSON_GetArraySize(initial_members); i++) {
-				YampUser usr;
-				if (CreateUserTypeFromID(
+				YampUser* usr;
+				if (CreateUserObjectFromID(
 						cJSON_GetArrayItem(initial_members, i)->valuestring,
 						&usr)) {
 					parsed_initmem[i] = usr;
 					validusers++;
 				}
 			}
-			CreateGC(*usr, validusers, parsed_initmem);
-
+			CreateGC(usr, validusers, parsed_initmem);
+			FreeUserArray(parsed_initmem,cJSON_GetArraySize(initial_members));
 			for (int i = 0; i < validusers; i++) {
 				// PushNewConversation(parsed_initmem[0].id, YampChannel conv)
 			}
@@ -618,7 +618,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			cJSON* tmp;
-			tmp = ListSpaceMembersFromID(usr->username);
+			tmp = ListSpaceMembersJSONFromID(usr->username);
 			cJSON_AddItemToObject(responsepayload, "space_members", tmp);
 		} else if (strcmp(endpoint, "SendMessage") == 0) {
 			char* content = cJSON_GetStringValue(
@@ -658,7 +658,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 			YampMessage msg = {0};
 			strcpy(msg.channel, where);
-			strcpy(msg.author, fromWho);
+			CreateUserObjectFromID(fromWho, &msg.author);
 			msg.timestamp = time(NULL);
 			msg.type = 0;
 			msg.content = strdup(content);
@@ -677,7 +677,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 						msg.attachments = realloc(msg.attachments,
 												  (msg.nAttachments + 1) *
 													  sizeof(YampAttachment));
-						msg.attachments[msg.nAttachments] = *ret;
+						msg.attachments[msg.nAttachments] = ret;
 						msg.nAttachments++;
 					}
 				}
@@ -687,7 +687,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			if (chatCtx.type >= 40) { // Dirty check for space channels
 				int outputLen;
 				char* space_id = GetSpaceFromChannelID(chatCtx.ChannelName);
-				cJSON* start = ListSpaceMembersFromID(space_id);
+				cJSON* start = ListSpaceMembersJSONFromID(space_id);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
 					cJSON* user = cJSON_GetArrayItem(start, i);
 					PushRecvIM(cJSON_GetObjectItem(user, "id")->valuestring,
@@ -699,7 +699,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				PushRecvIM(fromWho, where, &msg, nonce);
 			} else if (chatCtx.type == YAMP_GC) {
 				int outputLen;
-				cJSON* start = ListGCMembersFromID(chatCtx.GC_ID);
+				cJSON* start = ListGCMembersJSONFromID(chatCtx.GC_ID);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
 					cJSON* user = cJSON_GetArrayItem(start, i);
 					PushRecvIM(cJSON_GetObjectItem(user, "id")->valuestring,
@@ -710,6 +710,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			FreeMessageFields(&msg);
 			free(msg.reply); // NULL free is no-op so do not check that
 			InsertError(responsebuild, 0);
+		} else if (strcmp(endpoint,"ReactMessage") == 0) {
+			
 		} else if (strcmp(endpoint, "DeleteMessage") == 0) {
 			UserSession search;
 			search.con = *con;
@@ -726,7 +728,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			YampMessage* msg = CreateMessageTypeFromID(message);
-			if (strcmp(msg->author, usr->id) != 0) {
+			if (strcmp(msg->author->id, usr->id) != 0) {
 				FreeMessageObject(msg);
 				InsertError(responsebuild, 7);
 				goto finishresp;
@@ -739,7 +741,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			if (chatCtx.type >= 40) { // Dirty check for space channels
 				int outputLen;
 				char* space_id = GetSpaceFromChannelID(chatCtx.ChannelName);
-				cJSON* start = ListSpaceMembersFromID(space_id);
+				cJSON* start = ListSpaceMembersJSONFromID(space_id);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
 					cJSON* user = cJSON_GetArrayItem(start, i);
 					PushMessageDeleted(
@@ -750,7 +752,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				PushMessageDeleted(chatCtx.OtherGuy, msg->id);
 				PushMessageDeleted(usr->id, msg->id);
 			} else if (chatCtx.type == YAMP_GC) {
-				cJSON* start = ListGCMembersFromID(chatCtx.GC_ID);
+				cJSON* start = ListGCMembersJSONFromID(chatCtx.GC_ID);
 				for (int i = 0; i < cJSON_GetArraySize(start); i++) {
 					cJSON* user = cJSON_GetArrayItem(start, i);
 					PushMessageDeleted(
@@ -783,6 +785,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			cJSON_AddItemToObject(responsepayload, "channels", channels);
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "GetUserDetails") == 0) {
+			// add security here for later
 			cJSON* details;
 			char* name = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "name"));
@@ -790,7 +793,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 2);
 				goto finishresp;
 			}
-			CreateUserObjectFromUsername(name, &details);
+			CreateUserJSONFromUsername(name, &details);
 			cJSON_AddItemToObject(responsepayload, "user", details);
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "GetSpaceDetails") == 0) {
@@ -1199,7 +1202,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 			sqlite3_finalize(stmt);
 			InsertError(responsebuild, 0);
-			cJSON* spacemembers = ListSpaceMembersFromID(space);
+			cJSON* spacemembers = ListSpaceMembersJSONFromID(space);
 			for (int i = 0; i < cJSON_GetArraySize(spacemembers); i++) {
 				cJSON* user = cJSON_GetArrayItem(spacemembers, i);
 				PushUpdatedChannelsList(
@@ -1416,26 +1419,26 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			YAMPProcessWhere(channel, usr->id,
 							 &parsedchat); // TODO do not use "curUsername" but
 										   // rather "curID", same for "where"
-			if (parsedchat.type >= 40) {
-				YampUser* members = NULL;
+			if (YAMP_IS_SPACE_TYPE(parsedchat.type)) {
+				YampUser** members = NULL;
 				char* space_id = GetSpaceFromChannelID(parsedchat.ChannelName);
-				int nmembers = ListSpaceMembersTypeFromID(
+				int nmembers = ListSpaceMembersObjectsFromID(
 					space_id,
 					&members); // TODO fix that outdated field name to say
 							   // SpaceID
 				free(space_id);
 				for (int i = 0; i < nmembers; i++) {
-					PushJoinChannel(members[i].id, usr->id, channel);
-					FreeUserFields(&members[i]);
+					PushJoinChannel(members[i]->id, usr->id, channel);
+					FreeUserObject(members[i]);
 				}
 				free(members);
 			} else if (parsedchat.type == YAMP_GC) {
-				YampUser* members = NULL;
+				YampUser** members = NULL;
 				int nmembers =
-					ListGCMembersTypeFromID(parsedchat.GC_ID, &members);
+					ListGCMembersObjectsFromID(parsedchat.GC_ID, &members);
 				for (int i = 0; i < nmembers; i++) {
-					PushJoinChannel(members[i].id, usr->id, channel);
-					FreeUserFields(&members[i]);
+					PushJoinChannel(members[i]->id, usr->id, channel);
+					FreeUserObject(members[i]);
 				}
 				free(members);
 			} else if (parsedchat.type == YAMP_DM) {
@@ -1463,26 +1466,26 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			YAMPProcessWhere(channel, usr->id,
 							 &parsedchat); // TODO do not use "curUsername" but
 										   // rather "curID", same for "where"
-			if (parsedchat.type >= 40) {
-				YampUser* members = NULL;
+			if (YAMP_IS_SPACE_TYPE(parsedchat.type)) {
+				YampUser** members = NULL;
 				char* space_id = GetSpaceFromChannelID(parsedchat.ChannelName);
-				int nmembers = ListSpaceMembersTypeFromID(
+				int nmembers = ListSpaceMembersObjectsFromID(
 					space_id,
 					&members); // TODO fix that outdated field name to say
 							   // SpaceID
 				free(space_id);
 				for (int i = 0; i < nmembers; i++) {
-					PushLeftChannel(members[i].id, usr->id, channel);
-					FreeUserFields(&members[i]);
+					PushLeftChannel(members[i]->id, usr->id, channel);
+					FreeUserObject(members[i]);
 				}
 				free(members);
 			} else if (parsedchat.type == YAMP_GC) {
-				YampUser* members = NULL;
+				YampUser** members = NULL;
 				int nmembers =
-					ListGCMembersTypeFromID(parsedchat.GC_ID, &members);
+					ListGCMembersObjectsFromID(parsedchat.GC_ID, &members);
 				for (int i = 0; i < nmembers; i++) {
-					PushLeftChannel(members->id, usr->id, channel);
-					FreeUserFields(&members[i]);
+					PushLeftChannel(members[i]->id, usr->id, channel);
+					FreeUserObject(members[i]);
 				}
 				free(members);
 			} else if (parsedchat.type == YAMP_DM) {
@@ -1510,31 +1513,31 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			YAMPProcessWhere(channel, usr->id,
 							 &parsedchat); // TODO do not use "curUsername" but
 										   // rather "curID", same for "where"
-			if (parsedchat.type >= 40) {
-				YampUser* members = NULL;
+			if (YAMP_IS_SPACE_TYPE(parsedchat.type)) {
+				YampUser** members = NULL;
 				char* space_id = GetSpaceFromChannelID(parsedchat.ChannelName);
-				int nmembers = ListSpaceMembersTypeFromID(
+				int nmembers = ListSpaceMembersObjectsFromID(
 					space_id,
 					&members); // TODO fix that outdated field name to say
 							   // SpaceID
 				for (int i = 0; i < nmembers; i++) {
-					if (strcmp(members[i].id, usr->id) == 0) {
+					if (strcmp(members[i]->id, usr->id) == 0) {
 						continue;
 					}
-					PushTyping(members[i].id, usr->id, channel);
-					FreeUserFields(&members[i]);
+					PushTyping(members[i]->id, usr->id, channel);
+					FreeUserObject(members[i]);
 				}
 				free(members);
 			} else if (parsedchat.type == YAMP_GC) {
-				YampUser* members = NULL;
+				YampUser** members = NULL;
 				int nmembers =
-					ListGCMembersTypeFromID(parsedchat.GC_ID, &members);
+					ListGCMembersObjectsFromID(parsedchat.GC_ID, &members);
 				for (int i = 0; i < nmembers; i++) {
-					if (strcmp(members[i].id, usr->id) == 0) {
+					if (strcmp(members[i]->id, usr->id) == 0) {
 						continue;
 					}
-					PushTyping(members[i].id, usr->id, channel);
-					FreeUserFields(&members[i]);
+					PushTyping(members[i]->id, usr->id, channel);
+					FreeUserObject(members[i]);
 				}
 				free(members);
 			} else if (parsedchat.type == YAMP_DM) {

@@ -13,8 +13,8 @@ int hmap_session_compare(const void* a, const void* b, void* udata);
 void sha256_hex(const char *input, char *output_hex);
 
 char* dup0(const char* s);
-void FreeUserFields(YampUser* u);
 
 UserSession* FindSessionByFD(int fd);
 YampUser* FindUserByFD(int fd);
 void hmap_session_free(void* item);
+void FreeYampChannel(YampChannel* ch);

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>YAMP - A protocol that loves you</title>
+    <link href="styles.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="cubes" id="cubes" aria-hidden="true"></div>
+    <div class="topbar">
+        <img src="logo.svg" width="180" alt="YAMP">
+    </div>
+    <div class="content">
+        <h1>A chat protocol that
+            <u>
+                <span class="rotator">
+                    <span class="rotator-track">
+                        <span> loves you</span>
+                        <span> respects you</span>
+                        <span> does not suck</span>
+                        <span> is actually open-source</span>
+                        <span> cares about everyone</span>
+                        <span> cares about your freedom</span>
+                        <span> cares about you</span>
+                        <span aria-hidden="true"> loves you</span>
+                    </span>
+                </span>
+            </u>
+        </h1>
+
+        <p>YAMP offers a FOSS chat experience for casual people, power users, developers and more</p>
+        <p>Also featuring relatively easy-to-understand protocol, native clients, and is developer-friendly</p>
+        <p>What are you even waiting? Get the client for your platform now!</p>
+        <button><span style="vertical-align: middle;"><span class="material-symbols-outlined">
+                    download
+                </span>Download for Linux</span></button>
+    </div>
+
+    <script>
+        (() => {
+            const field = document.getElementById('cubes');
+            const rand = (a, b) => a + Math.random() * (b - a);
+            const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+            const cubes = Array.from({ length: 18 }, () => {
+                const size = rand(20, 60);
+                const angle = rand(0, Math.PI * 2);
+                const speed = still ? 0 : rand(6, 22);
+                const el = document.createElement('div');
+
+                el.className = 'cube';
+                el.style.cssText =
+                    `width:${size}px;height:${size}px;` +
+                    `opacity:${rand(0.15, 0.45)};filter:blur(${rand(0.2, 4)}px)`;
+                field.append(el);
+
+                return {
+                    el, size,
+                    x: rand(0, innerWidth - size),
+                    y: rand(0, innerHeight - size),
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    rot: rand(0, 360),
+                    vr: still ? 0 : rand(-12, 12),
+                };
+            });
+
+            const bounce = (pos, vel, max) =>
+                pos < 0 || pos > max ? [Math.min(Math.max(pos, 0), max), -vel] : [pos, vel];
+
+            let last = performance.now();
+            (function tick(now) {
+                const dt = Math.min((now - last) / 1000, 0.1);
+                last = now;
+
+                for (const c of cubes) {
+                    [c.x, c.vx] = bounce(c.x + c.vx * dt, c.vx, innerWidth - c.size);
+                    [c.y, c.vy] = bounce(c.y + c.vy * dt, c.vy, innerHeight - c.size);
+                    c.rot += c.vr * dt;
+                    c.el.style.transform =
+                        `translate(${c.x}px,${c.y}px) rotate(${c.rot}deg)`;
+                }
+                requestAnimationFrame(tick);
+            })(last);
+        })();
+    </script>
+
+
+
+</body>
+
+</html>

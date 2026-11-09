@@ -110,19 +110,12 @@ void sha256_hex(const char* input, char* output_hex) {
 
 char* dup0(const char* s) { return strdup(s ? (const char*)s : ""); }
 
-void FreeUserFields(YampUser* u) {
-	free(u->username);
-	free(u->displayname);
-	free(u->pfp);
-	free(u->description);
-}
-
 void FreeYampChannel(YampChannel* ch) {
 	if (!ch)
 		return;
-	YampUser* people = (YampUser*)(ch + 1);
+	YampUser** people = (YampUser**)(ch + 1);
 	for (int i = 0; i < ch->npeople; i++)
-		FreeUserFields(&people[i]);
+		FreeUserObject(people[i]);
 	free(ch->name);
 	free(ch->parent);
 	free(ch);
@@ -201,15 +194,15 @@ YampChannel* GetDMFromAddress(const char* addr) {
 	YampChannel* conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser));
 	if (!conv)
 		return NULL;
-	YampUser* people = (YampUser*)(conv + 1);
+	YampUser** people = (YampUser**)(conv + 1);
 
 	conv->type = YAMP_DM;
-	if (!CreateUserTypeFromID(a, &people[0])) {
+	if (!CreateUserObjectFromID(a, &people[0])) {
 		free(conv);
 		return NULL;
 	}
 	conv->npeople = 1;
-	if (!CreateUserTypeFromID(b, &people[1])) {
+	if (!CreateUserObjectFromID(b, &people[1])) {
 		FreeYampChannel(conv);
 		return NULL;
 	}
@@ -270,10 +263,10 @@ YampChannel* GetGCFromID(const char* gid) {
 			}
 			conv = grown;
 		}
-		YampUser* people = (YampUser*)(conv + 1);
-		if (CreateUserTypeFromID(uid, &people[n_people])) {
+		YampUser** people = (YampUser**)(conv + 1);
+		if (CreateUserObjectFromID(uid, &people[n_people])) {
 			n_people++;
-			conv->npeople = n_people; /* keep in sync for cleanup */
+			conv->npeople = n_people;
 		}
 	}
 	sqlite3_finalize(st);
