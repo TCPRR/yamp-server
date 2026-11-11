@@ -15,7 +15,7 @@ body {
 }
 h1 {
   font-size: 32px;
-  text-shadow: 0 5px 0 #f25858;
+  text-shadow: 0 4px 0 #f25858;
 }
 .topbar { padding: 15px; 
   background: linear-gradient(to bottom, #95272780, transparent);}
@@ -35,16 +35,26 @@ u{
 p{
     margin:8px;
 }
-button{
-    vertical-align: middle;
+button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+
     font-weight: 500;
-    font-size:16px;
+    font-size: 16px;
     font-family: Montserrat, system-ui, sans-serif;
-    transition: 1s;
     background: linear-gradient(to bottom, white, #e0e0e0);
-    padding:10px;
+    padding: 10px;
     border-radius: 50px;
-    border-style:none;
+    border: none;
+}
+.material-symbols-outlined {
+    display: inline-block;
+    font-size: 20px;
+    line-height: 1;
+    font-weight: normal;
+    vertical-align: middle;
 }
 
 
@@ -59,6 +69,7 @@ button{
 
 .rotator-track {
   display: block;
+  width: max-content;
   animation: rotate 21s infinite;
 }
 

@@ -14,6 +14,11 @@ int GenerateID_Inline(char* id);
 int GenerateToken_Inline(char* id);
 int GenerateUploadToken_Inline(char* id);
 
+// Status Objects
+YampStatus* CreateOfflineStatus();
+YampStatus* CreateOnlineStatus();
+void FreeStatusObject(YampStatus* stat);
+
 // User Objects
 YampUser* ParseUserJSON(cJSON* rawusr);
 cJSON *CreateUserJSON(YampUser *user);
@@ -48,7 +53,7 @@ cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit);
 cJSON* GetMessageHistory(char* where);
 int PushEvent(Connection con, char *event, cJSON *data);
 int PushRecvIM(char* toID, char* channel, YampMessage* msg, int nonce);
-int PushStatusUpdate(char *toWho, char *who, status status);
+int PushStatusUpdate(char* toWho, char* who, YampStatus* status);
 int PushFQ(char *toWho, char *fromWho);
 int PushProfileUpdate(char* toID, char* fromID);
 void CreateFriendReq(char* sender, char* receiver);
@@ -100,3 +105,19 @@ char* GetSpaceFromChannelID(char* channel_id);
 YampAttachment* ParseAttachmentJSON(cJSON* json);
 void FreeAttachmentTypeFields(YampAttachment* attach);
 YampAttachment* DupAttachmentObject(YampAttachment* attachment);
+
+
+// Reactions
+cJSON* CreateReactionJSON(const YampReaction* r);
+int ListReactionObjectsForID(const char* msg_id, YampReaction*** out);
+void FreeReactionArray(YampReaction** arr, int n);
+void FreeReactionObject(YampReaction* r);
+void DeleteReactionsForMessageID(const char* msg_id);
+int RemoveReaction(const char* msg_id, const char* user_id,
+				   const char* codepoint);
+int InsertReactionForMessageID(const char* msg_id, const char* user_id,
+				    const char* codepoint);
+
+// Space invites
+int JoinSpaceViaInvite(const char* user_id, const char* code,
+					   char** space_out);

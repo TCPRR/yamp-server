@@ -21,7 +21,7 @@
 
 // TODO: finish deprecating the type chat for the type YampChannel EVERYWHERE
 typedef struct {
-	char type; // 0 = DM, 1 = Space Channel
+	uint64_t type; // 0 = DM, 1 = Space Channel
 	char *where; // to be used in the APIs
 	char *OtherGuy; // for DMs only, otherwise NULL.. CHECK AND DO NOT
 	                // DEREFERENCE THAAT!
@@ -34,7 +34,7 @@ typedef struct{
 	char* RPCName;
 	char* RPCDesc;
 	char* RPCIcon;
-} status;
+} YampStatus;
 typedef struct {
 	int connected;
 	int encrypt;
@@ -62,9 +62,7 @@ struct YampUser {
 	char* displayname;
 	char* description;
 	char* pfp;
-	status status;
-	int isTyping;
-	char typingAt[34];
+	YampStatus* status;
 	char* banner;
 	UserSession* sessions;
 };

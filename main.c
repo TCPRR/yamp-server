@@ -192,15 +192,20 @@ void DisconnectClient(int i) {
 	if (usr) {
 		int cnt;
 		char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
+		YampStatus* offline_stat = CreateOfflineStatus();
 		for (int j = 0; j < cnt; j++) {
 			PushStatusUpdate(relatedpeople[j], usr->id,
-							 (status){"offline", "", "", ""});
+							 offline_stat);
 		}
+		FreeStatusObject(offline_stat);
 		hashmap_delete(UsersByID, usr);
 		hashmap_delete(UsersByName, usr);
 		UserSession* ses = usr->sessions;
 		while (ses){
-			hashmap_delete(UserSessionsByFD, ses); // hashmaps callback frees the elements
+			FreeUserObject(ses->user);
+			free(ses->device);
+			free(ses->token);
+			hashmap_delete(UserSessionsByFD, ses);
 			ses = ses->next;
 		}
 	}

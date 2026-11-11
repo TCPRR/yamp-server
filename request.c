@@ -28,8 +28,9 @@ static const ErrorData errors[] = {
 	{9, "You cannot friend yourself (That's schizophrenia)"},
 	{10, "No such object (user/space)"},
 	{11, "No such channel, malformed where field?"},
-	{12, "Above the maximum length of a text field"},
+	{12, "Above the maximum length of a text field"},	
 	{13, "Replied message does not exist"},
+	{14, "Already in this space"},
 };
 
 static const char* ErrorMessage(int code) {
@@ -236,7 +237,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				strncpy(newUser->id, (const char*)sqlite3_column_text(stmt, 2),
 						17);
 				// newUser->con = *con;
-				newUser->status = (status){"online", "", "", ""};
+				newUser->status = CreateOnlineStatus();
 
 
 				UserSession* newSession = malloc(sizeof(UserSession));
@@ -618,7 +619,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			cJSON* tmp;
-			tmp = ListSpaceMembersJSONFromID(usr->username);
+			tmp = ListSpaceMembersJSONFromID(space);
 			cJSON_AddItemToObject(responsepayload, "space_members", tmp);
 		} else if (strcmp(endpoint, "SendMessage") == 0) {
 			char* content = cJSON_GetStringValue(
@@ -684,7 +685,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			GenerateID_Inline(msg.id);
 			InsertMessage(&msg);
-			if (chatCtx.type >= 40) { // Dirty check for space channels
+			if (YAMP_IS_SPACE_TYPE(chatCtx.type)) {
 				int outputLen;
 				char* space_id = GetSpaceFromChannelID(chatCtx.ChannelName);
 				cJSON* start = ListSpaceMembersJSONFromID(space_id);
@@ -738,7 +739,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 			chat chatCtx;
 			YAMPProcessWhere(msg->channel, usr->id, &chatCtx);
-			if (chatCtx.type >= 40) { // Dirty check for space channels
+			if (YAMP_IS_SPACE_TYPE(chatCtx.type)) {
 				int outputLen;
 				char* space_id = GetSpaceFromChannelID(chatCtx.ChannelName);
 				cJSON* start = ListSpaceMembersJSONFromID(space_id);
@@ -1321,7 +1322,41 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					InsertError(responsebuild, 4);
 					goto finishresp;
 				}
+				InsertError(responsebuild, 0);
+			} else{
+				InsertError(responsebuild, 2);
 			}
+		} else if (strcmp(endpoint, "JoinSpace") == 0) {
+			UserSession search;
+			search.con = *con;
+			UserSession* usrses = hashmap_get(UserSessionsByFD, &search);
+			if (!usrses) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			YampUser* usr = usrses->user;
+
+			char* code = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "code"));
+			if (!code || strlen(code) != 8) {
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+
+			char* space_id = NULL;
+			int err = JoinSpaceViaInvite(usr->id, code, &space_id);
+			if (err) {
+				InsertError(responsebuild, err);
+				goto finishresp;
+			}
+
+			cJSON* details = NULL;
+			if (CreateSpaceObjectFromID(space_id, &details))
+				cJSON_AddItemToObject(responsepayload, "space", details);
+
+			PushNewSpace(usr->id, space_id);
+			free(space_id);
+			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "UpdateUserProfile") == 0) {
 
 			UserSession search;
@@ -1493,7 +1528,6 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				PushLeftChannel(parsedchat.OtherGuy, usr->id, channel);
 			}
 		} else if (strcmp(endpoint, "Typing") == 0) {
-
 			UserSession search;
 			search.con = *con;
 			UserSession* usrses = hashmap_get(UserSessionsByFD, &search);
@@ -1528,6 +1562,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					FreeUserObject(members[i]);
 				}
 				free(members);
+				free(space_id);
 			} else if (parsedchat.type == YAMP_GC) {
 				YampUser** members = NULL;
 				int nmembers =
@@ -1543,6 +1578,51 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			} else if (parsedchat.type == YAMP_DM) {
 				PushTyping(parsedchat.OtherGuy, usr->id, channel);
 			}
+		} else if(strcmp(endpoint,"ReactMessage") == 0){
+			// TODO get the channel this message is in, and secure via that
+			UserSession search;
+			search.con = *con;
+			UserSession* usrses = hashmap_get(UserSessionsByFD, &search);
+			if (!usrses) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			YampUser* usr = usrses->user;
+			char* msg = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "message_id"));
+			char* codepoint = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "emoji"));
+			if(!(msg && codepoint)){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			InsertReactionForMessageID(msg, usr->id, codepoint);
+		} else if(strcmp(endpoint,"UnreactMessage")==0){
+			// TODO same as above TODO
+			UserSession search;
+			search.con = *con;
+			UserSession* usrses = hashmap_get(UserSessionsByFD, &search);
+			if (!usrses) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			YampUser* usr = usrses->user;
+			char* msg = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "message_id"));
+			char* codepoint = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "emoji"));
+			if(!(msg && codepoint)){
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			RemoveReaction(msg, usr->id, codepoint);
+		} else if(strcmp(endpoint,"SetStatus")==0){
+			// TODO same as above TODO
+			UserSession search;
+			search.con = *con;
+			UserSession* usrses = hashmap_get(UserSessionsByFD, &search);
+			if (!usrses) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			YampUser* usr = usrses->user;
+			
 		} else {
 			// Invalid endpoint!?
 			InsertError(responsebuild, 3);

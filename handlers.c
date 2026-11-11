@@ -53,10 +53,12 @@ int GenerateID_Inline(char* id) {
 		id[i] = alphabet[t & 31];
 		t >>= 5;
 	}
-	for (int pos = 9; pos < 12; ) {
+	for (int pos = 9; pos < 12;) {
 		unsigned char byte;
-		if (RAND_bytes(&byte, 1) != 1) return 0;
-		if (byte >= 224) continue;
+		if (RAND_bytes(&byte, 1) != 1)
+			return 0;
+		if (byte >= 224)
+			continue;
 		id[pos++] = alphabet[byte % 32];
 	}
 	id[12] = '\0';
@@ -121,6 +123,68 @@ int GenerateUploadToken_Inline(char* id) {
 	return 1;
 }
 
+cJSON* CreateStatusJSON(YampStatus* status) {
+	cJSON* stat = cJSON_CreateObject();
+	cJSON_AddStringToObject(stat, "status", status->status);
+	cJSON_AddStringToObject(stat, "rpc_desc", status->RPCDesc);
+	cJSON_AddStringToObject(stat, "rpc_icon", status->RPCIcon);
+	cJSON_AddStringToObject(stat, "rpc_name", status->RPCName);
+	return stat;
+}
+YampStatus* ParseStatusJSON(cJSON* status) {
+	YampStatus* stat = malloc(sizeof(*stat));
+	stat->status =
+		dup0(cJSON_GetStringValue(cJSON_GetObjectItem(status, "status")));
+	stat->RPCDesc =
+		dup0(cJSON_GetStringValue(cJSON_GetObjectItem(status, "rpc_desc")));
+	stat->RPCIcon =
+		dup0(cJSON_GetStringValue(cJSON_GetObjectItem(status, "rpc_icon")));
+	stat->RPCName =
+		dup0(cJSON_GetStringValue(cJSON_GetObjectItem(status, "rpc_name")));
+	return stat;
+}
+void FreeStatusFields(YampStatus* stat) {
+	if (!stat) {
+		return;
+	}
+	free(stat->status);
+	free(stat->RPCDesc);
+	free(stat->RPCIcon);
+	free(stat->RPCName);
+}
+void FreeStatusObject(YampStatus* stat) {
+	if (!stat) {
+		return;
+	}
+	FreeStatusFields(stat);
+	free(stat);
+}
+YampStatus* DupStatusObject(YampStatus* stat) {
+	YampStatus* heapstat = malloc(sizeof(*heapstat));
+	heapstat->status = dup0(stat->status);
+	heapstat->RPCDesc = dup0(stat->RPCDesc);
+	heapstat->RPCIcon = dup0(stat->RPCIcon);
+	heapstat->RPCName = dup0(stat->RPCName);
+	return heapstat;
+}
+// Handy filler if the users are not logged in
+YampStatus* CreateOfflineStatus() {
+	YampStatus* heapstat = malloc(sizeof(*heapstat));
+	heapstat->status = strdup("offline");
+	heapstat->RPCDesc = NULL;
+	heapstat->RPCIcon = NULL;
+	heapstat->RPCName = NULL;
+	return heapstat;
+}
+// Handy filler when the user logs in now
+YampStatus* CreateOnlineStatus() {
+	YampStatus* heapstat = malloc(sizeof(*heapstat));
+	heapstat->status = strdup("online");
+	heapstat->RPCDesc = NULL;
+	heapstat->RPCIcon = NULL;
+	heapstat->RPCName = NULL;
+	return heapstat;
+}
 cJSON* CreateUserJSON(YampUser* user) {
 	cJSON* obj = cJSON_CreateObject();
 
@@ -130,13 +194,7 @@ cJSON* CreateUserJSON(YampUser* user) {
 	cJSON_AddStringToObject(obj, "description", user->description);
 	cJSON_AddStringToObject(obj, "avatar", user->pfp);
 
-	cJSON* status_obj = cJSON_CreateObject();
-
-	cJSON_AddStringToObject(status_obj, "RPCName", user->status.RPCName);
-	cJSON_AddStringToObject(status_obj, "RPCDesc", user->status.RPCDesc);
-	cJSON_AddStringToObject(status_obj, "RPCIcon", user->status.RPCIcon);
-	cJSON_AddStringToObject(status_obj, "status", user->status.status);
-
+	cJSON* status_obj = CreateStatusJSON(user->status);
 	cJSON_AddItemToObject(obj, "status", status_obj);
 
 	return obj;
@@ -147,9 +205,11 @@ void FreeUserFields(YampUser* u) {
 	free(u->displayname);
 	free(u->pfp);
 	free(u->description);
+	FreeStatusObject(u->status);
 }
 void FreeUserObject(YampUser* u) {
-	if (!u) return;
+	if (!u)
+		return;
 	FreeUserFields(u);
 	free(u);
 }
@@ -162,10 +222,7 @@ YampUser* DupUserObject(YampUser* usr) {
 	heapusr->description = dup0(usr->description);
 	heapusr->pfp = dup0(usr->pfp);
 
-	heapusr->status.status = dup0(usr->status.status);
-	heapusr->status.RPCDesc = dup0(usr->status.RPCDesc);
-	heapusr->status.RPCIcon = dup0(usr->status.RPCIcon);
-	heapusr->status.RPCName = dup0(usr->status.RPCName);
+	heapusr->status = DupStatusObject(usr->status);
 	return heapusr;
 }
 /*******************************************************************************
@@ -197,13 +254,19 @@ YampUser* ParseUserJSON(cJSON* rawusr) {
 		usr.pfp = NULL;
 	}
 	cJSON* rawstatus = cJSON_GetObjectItem(rawusr, "status");
-	usr.status.status = (cJSON_GetObjectItem(rawstatus, "status")->valuestring);
-	usr.status.RPCName =
-		(cJSON_GetObjectItem(rawstatus, "RPCName")->valuestring);
-	usr.status.RPCDesc =
-		(cJSON_GetObjectItem(rawstatus, "RPCDesc")->valuestring);
-	usr.status.RPCIcon =
-		(cJSON_GetObjectItem(rawstatus, "RPCIcon")->valuestring);
+	usr.status = NULL;
+	if (rawstatus) {
+		usr.status = ParseStatusJSON(rawstatus);
+	} else {
+		// Populate if the user was found
+		YampUser* usr_stat = hashmap_get(UsersByID, &usr);
+		if (usr_stat) {
+			usr.status = usr_stat->status;
+		} else {
+			usr.status = CreateOfflineStatus(); // filler
+		}
+	}
+
 	return DupUserObject(&usr);
 }
 
@@ -357,15 +420,13 @@ int CreateUserObjectFromID(const char* id, YampUser** output) {
 
 	sqlite3_finalize(stmt);
 
-	YampUser search = {0};
-	search.username = (*output)->username;
+	const YampUser* usr = hashmap_get(UsersByID, *output);
 
-	const YampUser* usr = hashmap_get(UsersByName, &search);
-
-	if (usr && strcmp(usr->status.status, "offline") != 0)
-		(*output)->status = usr->status;
-	else
-		(*output)->status = (status){"offline", "", "", ""};
+	if (usr && usr->status && strcmp(usr->status->status, "offline") != 0) {
+		(*output)->status = DupStatusObject(usr->status);
+	} else {
+		(*output)->status = CreateOfflineStatus();
+	}
 
 	return 1;
 }
@@ -915,6 +976,78 @@ char* GetSpaceFromChannelID(char* channel_id) {
 	sqlite3_finalize(stmt);
 	return NULL;
 }
+int JoinSpaceViaInvite(const char* user_id, const char* code,
+					   char** space_out) {
+	*space_out = NULL;
+	char* space_id = NULL;
+	sqlite3_stmt* stmt = NULL;
+	int uses = 0;
+	int err = 4;
+
+	if (sqlite3_exec(DB, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK)
+		return 4;
+
+	if (sqlite3_prepare_v2(DB,
+						   "SELECT space, uses FROM spaceinvite WHERE code = ?",
+						   -1, &stmt, NULL) != SQLITE_OK)
+		goto fail;
+	sqlite3_bind_text(stmt, 1, code, -1, SQLITE_STATIC);
+	if (sqlite3_step(stmt) != SQLITE_ROW) {
+		sqlite3_finalize(stmt);
+		err = 10;
+		goto fail;
+	}
+	space_id = strdup((const char*)sqlite3_column_text(stmt, 0));
+	uses = sqlite3_column_int(stmt, 1);
+	sqlite3_finalize(stmt);
+	stmt = NULL;
+	if (!space_id)
+		goto fail;
+
+	if (IsInSpaceViaUserID((char*)user_id, space_id)) {
+		err = 14;
+		goto fail;
+	}
+
+	const char* msql =
+		"INSERT INTO \"user-space\" (\"user-id\", \"space-id\", \"pos\") "
+		"VALUES (?1, ?2, COALESCE((SELECT MAX(\"pos\") + 1 FROM "
+		"\"user-space\" WHERE \"user-id\" = ?1), 0))";
+	if (sqlite3_prepare_v2(DB, msql, -1, &stmt, NULL) != SQLITE_OK)
+		goto fail;
+	sqlite3_bind_text(stmt, 1, user_id, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, space_id, -1, SQLITE_STATIC);
+	int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	stmt = NULL;
+	if (rc != SQLITE_DONE)
+		goto fail;
+
+	if (uses > 0) {
+		const char* usql =
+			uses == 1 ? "DELETE FROM spaceinvite WHERE code = ?"
+					  : "UPDATE spaceinvite SET uses = uses - 1 WHERE code = ?";
+		if (sqlite3_prepare_v2(DB, usql, -1, &stmt, NULL) != SQLITE_OK)
+			goto fail;
+		sqlite3_bind_text(stmt, 1, code, -1, SQLITE_STATIC);
+		rc = sqlite3_step(stmt);
+		sqlite3_finalize(stmt);
+		stmt = NULL;
+		if (rc != SQLITE_DONE)
+			goto fail;
+	}
+
+	if (sqlite3_exec(DB, "COMMIT", NULL, NULL, NULL) != SQLITE_OK)
+		goto fail;
+	*space_out = space_id;
+	return 0;
+
+fail:
+	sqlite3_exec(DB, "ROLLBACK", NULL, NULL, NULL);
+	free(space_id);
+	return err;
+}
+
 int IsInSpaceViaUserID(char* userid, char* spaceid) {
 	if (!(userid && spaceid)) {
 		return 0; // It can be paired with GetSpaceFromChannelID without checks
@@ -1058,7 +1191,8 @@ int InsertReactionForMessageID(const char* msg_id, const char* user_id,
 	sqlite3_bind_text(stmt, 3, codepoint, -1, SQLITE_STATIC);
 
 	int idx = -1;
-	if (sqlite3_step(stmt) == SQLITE_ROW) { // an ignored duplicate returns no row
+	if (sqlite3_step(stmt) ==
+		SQLITE_ROW) { // an ignored duplicate returns no row
 		idx = sqlite3_column_int(stmt, 0);
 		if (sqlite3_step(stmt) != SQLITE_DONE)
 			idx = -1;
@@ -1606,16 +1740,10 @@ int PushFQ(char* toID, char* fromID) {
 	return PushEventToUser(toID, "IncomingFriendReq", payload);
 }
 
-int PushStatusUpdate(char* toWho, char* who, status status) {
-	cJSON* stat = cJSON_CreateObject();
-	cJSON_AddStringToObject(stat, "status", status.status);
-	cJSON_AddStringToObject(stat, "RPCDesc", status.RPCDesc);
-	cJSON_AddStringToObject(stat, "RPCIcon", status.RPCIcon);
-	cJSON_AddStringToObject(stat, "RPCName", status.RPCName);
-
+int PushStatusUpdate(char* toWho, char* who, YampStatus* status) {
 	cJSON* payload = cJSON_CreateObject();
 	cJSON_AddStringToObject(payload, "user", who);
-	cJSON_AddItemToObject(payload, "status", stat);
+	cJSON_AddItemToObject(payload, "status", CreateStatusJSON(status));
 	return PushEventToUser(toWho, "StatusUpdate", payload);
 }
 
@@ -1645,9 +1773,7 @@ int PushNewFriend(char* who, char* user_id) {
 }
 
 int PushNewConversation(char* userid, YampChannel conv) {
-	cJSON* body = NULL;
-	if (!CreateUserJSONFromID(userid, &body)) // see note below
-		return 0;
+	cJSON* body = CreateConvObject(&conv);
 	return PushEventToUser(userid, "NewConversation", body);
 }
 
