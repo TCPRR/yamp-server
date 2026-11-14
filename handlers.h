@@ -72,7 +72,7 @@ int PushNewFriend(char* who, char* user_id);
 YampUser ParseUserObject(cJSON* rawusr);
 int UpdateUserProfile(char* id, YampUser newprofile);
 
-int PushNewConversation(char* userid, YampChannel conv);
+int PushNewConversation(char* userid, YampChannel* conv);
 
 // Group chat funcs
 void CreateGC(YampUser* creator, int ninitmember, YampUser** initmembers);
@@ -84,7 +84,8 @@ int ListGCMembersObjectsFromID(char* id, YampUser*** out);
 void FreeUserArray(YampUser** arr, int n);
 int AddMemberToGC(char* uid, char* gcid);
 
-YampChannel CreateDM(char* starter, char* recipient);
+YampChannel* BuildDMConv(const char* a, const char* b);
+int CreateDM(char* starter, char* recipient);
 int HasDMs(char* starter, char* recipient);
 
 int PushJoinChannel(char* toID, char* fromID, char* channel);

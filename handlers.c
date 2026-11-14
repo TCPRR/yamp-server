@@ -463,7 +463,7 @@ char* CreateSpaceInvite(const char* space_id, int uses) {
 	code[8] = '\0';
 
 	const char* sql =
-		"INSERT INTO spaceinvite (space, uses, code) VALUES (?,?,?)";
+		"INSERT INTO \"space-invites\" (space, uses, code) VALUES (?,?,?)";
 	sqlite3_stmt* stmt;
 	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK)
 		return NULL;
@@ -475,7 +475,7 @@ char* CreateSpaceInvite(const char* space_id, int uses) {
 	return ok ? strdup(code) : NULL;
 }
 cJSON* GetSpaceDetailsFromInvite(const char* invite) {
-	const char* sql = "SELECT space FROM spaceinvite WHERE code = ?";
+	const char* sql = "SELECT space FROM \"space-invites\" WHERE code = ?";
 	sqlite3_stmt* stmt;
 	if (sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL) != SQLITE_OK)
 		return NULL;
@@ -988,7 +988,7 @@ int JoinSpaceViaInvite(const char* user_id, const char* code,
 		return 4;
 
 	if (sqlite3_prepare_v2(DB,
-						   "SELECT space, uses FROM spaceinvite WHERE code = ?",
+						   "SELECT space, uses FROM \"space-invites\" WHERE code = ?",
 						   -1, &stmt, NULL) != SQLITE_OK)
 		goto fail;
 	sqlite3_bind_text(stmt, 1, code, -1, SQLITE_STATIC);
@@ -1025,8 +1025,8 @@ int JoinSpaceViaInvite(const char* user_id, const char* code,
 
 	if (uses > 0) {
 		const char* usql =
-			uses == 1 ? "DELETE FROM spaceinvite WHERE code = ?"
-					  : "UPDATE spaceinvite SET uses = uses - 1 WHERE code = ?";
+			uses == 1 ? "DELETE FROM \"space-invites\" WHERE code = ?"
+					  : "UPDATE \"space-invites\" SET uses = uses - 1 WHERE code = ?";
 		if (sqlite3_prepare_v2(DB, usql, -1, &stmt, NULL) != SQLITE_OK)
 			goto fail;
 		sqlite3_bind_text(stmt, 1, code, -1, SQLITE_STATIC);
@@ -1295,6 +1295,7 @@ cJSON* CreateReactionJSON(const YampReaction* r) {
 void FreeMessageFields(YampMessage* msg) {
 	if (!msg)
 		return;
+	FreeUserObject(msg->author);
 	free(msg->content);
 	msg->content = NULL;
 	if (msg->reply) {
@@ -1302,8 +1303,7 @@ void FreeMessageFields(YampMessage* msg) {
 		msg->reply = NULL;
 	}
 	for (int i = 0; i < msg->nAttachments; i++) {
-		FreeAttachmentTypeFields(msg->attachments[i]);
-		free(msg->attachments[i]);
+		FreeAttachmentObject(msg->attachments[i]);
 	}
 	free(msg->attachments);
 	msg->attachments = NULL;
@@ -1408,7 +1408,27 @@ void InsertMessage(YampMessage* msg) {
 		}
 	}
 }
-YampChannel CreateDM(char* starter, char* recipient) {
+YampChannel* BuildDMConv(const char* a, const char* b) {
+	YampChannel* conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser*));
+	if (!conv) return NULL;
+	conv->type = YAMP_DM;
+	conv->npeople = 2;
+	YampUser** p = (YampUser**)(conv + 1);
+	if (!CreateUserObjectFromID(a, &p[0]) ||
+	    !CreateUserObjectFromID(b, &p[1])) {
+		FreeUserObject(p[0]);   // NULL-safe
+		free(conv);
+		return NULL;
+	}
+	return conv;
+}
+void FreeDMConv(YampChannel* conv) {
+	YampUser** p = (YampUser**)(conv + 1);
+	FreeUserObject(p[0]);
+	FreeUserObject(p[1]);
+	free(conv);
+}
+int CreateDM(char* starter, char* recipient) {
 	const char* sql =
 		"INSERT INTO \"dm\" (\"starter\", \"recipient\") VALUES (?, ?)";
 	sqlite3_stmt* stmt;
@@ -1417,6 +1437,7 @@ YampChannel CreateDM(char* starter, char* recipient) {
 	sqlite3_bind_text(stmt, 2, recipient, -1, SQLITE_STATIC);
 	sqlite3_step(stmt);
 	sqlite3_finalize(stmt);
+	return 1;
 }
 int HasDMs(char* starter, char* recipient) {
 	const char* sql =
@@ -1772,12 +1793,12 @@ int PushNewFriend(char* who, char* user_id) {
 	return PushEventToUser(who, "NewFriend", body);
 }
 
-int PushNewConversation(char* userid, YampChannel conv) {
-	cJSON* body = CreateConvObject(&conv);
+int PushNewConversation(char* userid, YampChannel* conv) {
+	cJSON* body = CreateConvObject(conv);
 	return PushEventToUser(userid, "NewConversation", body);
 }
 
-int PushProfileUpdate(char* fromID, char* toID) {
+int PushProfileUpdate(char* toID, char* fromID) {
 	cJSON* body = NULL;
 	if (!CreateUserJSONFromID(fromID, &body))
 		return 0;

@@ -18,3 +18,4 @@ UserSession* FindSessionByFD(int fd);
 YampUser* FindUserByFD(int fd);
 void hmap_session_free(void* item);
 void FreeYampChannel(YampChannel* ch);
+void FreeStrList(char** arr, int cnt);

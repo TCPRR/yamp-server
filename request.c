@@ -28,7 +28,7 @@ static const ErrorData errors[] = {
 	{9, "You cannot friend yourself (That's schizophrenia)"},
 	{10, "No such object (user/space)"},
 	{11, "No such channel, malformed where field?"},
-	{12, "Above the maximum length of a text field"},	
+	{12, "Above the maximum length of a text field"},
 	{13, "Replied message does not exist"},
 	{14, "Already in this space"},
 };
@@ -228,31 +228,31 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 					hashmap_set(UserSessionsByFD, newSession);
 				} else {
-				newUser = malloc(sizeof(YampUser));
-				*newUser = (YampUser){0};
-				newUser->username =
-					strdup((const char*)sqlite3_column_text(stmt, 0));
-				newUser->displayname =
-					strdup((const char*)sqlite3_column_text(stmt, 1));
-				strncpy(newUser->id, (const char*)sqlite3_column_text(stmt, 2),
-						17);
-				// newUser->con = *con;
-				newUser->status = CreateOnlineStatus();
+					newUser = malloc(sizeof(YampUser));
+					*newUser = (YampUser){0};
+					newUser->username =
+						strdup((const char*)sqlite3_column_text(stmt, 0));
+					newUser->displayname =
+						strdup((const char*)sqlite3_column_text(stmt, 1));
+					strncpy(newUser->id,
+							(const char*)sqlite3_column_text(stmt, 2), 17);
+					// newUser->con = *con;
+					newUser->status = CreateOnlineStatus();
 
 
-				UserSession* newSession = malloc(sizeof(UserSession));
-				newSession->con = *con;
-				newSession->user = newUser;
-				newSession->token = strdup(token);
-				newSession->device = strdup(session_device);
-				newSession->device_type = session_device_type;
-				newSession->prev = NULL;
-				newSession->next = NULL;
+					UserSession* newSession = malloc(sizeof(UserSession));
+					newSession->con = *con;
+					newSession->user = newUser;
+					newSession->token = strdup(token);
+					newSession->device = strdup(session_device);
+					newSession->device_type = session_device_type;
+					newSession->prev = NULL;
+					newSession->next = NULL;
 
-				newUser->sessions = newSession;
-				hashmap_set(UserSessionsByFD, newSession);
-				hashmap_set(UsersByName, newUser);
-				hashmap_set(UsersByID, newUser);
+					newUser->sessions = newSession;
+					hashmap_set(UserSessionsByFD, newSession);
+					hashmap_set(UsersByName, newUser);
+					hashmap_set(UsersByID, newUser);
 				}
 
 				char** usrlist = NULL;
@@ -502,7 +502,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			if (!HasDMs(usr->id, recipient)) {
-				YampChannel ch = CreateDM(usr->id, recipient);
+				CreateDM(usr->id, recipient);
+				YampChannel* ch = BuildDMConv(usr->id,recipient);
 				PushNewConversation(usr->id, ch);
 				PushNewConversation(recipient, ch);
 			}
@@ -535,7 +536,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 			}
 			CreateGC(usr, validusers, parsed_initmem);
-			FreeUserArray(parsed_initmem,cJSON_GetArraySize(initial_members));
+			FreeUserArray(parsed_initmem, cJSON_GetArraySize(initial_members));
 			for (int i = 0; i < validusers; i++) {
 				// PushNewConversation(parsed_initmem[0].id, YampChannel conv)
 			}
@@ -677,7 +678,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					if (ret) {
 						msg.attachments = realloc(msg.attachments,
 												  (msg.nAttachments + 1) *
-													  sizeof(YampAttachment));
+													  sizeof(YampAttachment*));
 						msg.attachments[msg.nAttachments] = ret;
 						msg.nAttachments++;
 					}
@@ -694,6 +695,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					PushRecvIM(cJSON_GetObjectItem(user, "id")->valuestring,
 							   where, &msg, nonce);
 				}
+				free(space_id);
 				cJSON_Delete(start);
 			} else if (chatCtx.type == YAMP_DM) {
 				PushRecvIM(chatCtx.OtherGuy, where, &msg, nonce);
@@ -711,8 +713,6 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			FreeMessageFields(&msg);
 			free(msg.reply); // NULL free is no-op so do not check that
 			InsertError(responsebuild, 0);
-		} else if (strcmp(endpoint,"ReactMessage") == 0) {
-			
 		} else if (strcmp(endpoint, "DeleteMessage") == 0) {
 			UserSession search;
 			search.con = *con;
@@ -979,7 +979,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			YampUser* usr = usrses->user;
 			char* fromWho = usr->id;
-			char* id;
+			char* id = NULL;
 			GenerateID(&id);
 			const char* sql = "INSERT INTO \"spaces\" (\"id\", \"name\", "
 							  "\"display_name\", \"type\", \"description\", "
@@ -1034,7 +1034,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			sqlite3_bind_text(cstmt, 1, "general", -1, SQLITE_STATIC);
 			sqlite3_bind_int(cstmt, 2, 0);
 			sqlite3_bind_text(cstmt, 3, id, -1, SQLITE_STATIC);
-			char* channel_id;
+			char* channel_id = NULL;
 			GenerateID(&channel_id);
 			sqlite3_bind_text(cstmt, 4, channel_id, -1, SQLITE_STATIC);
 			sqlite3_step(cstmt);
@@ -1191,7 +1191,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			} else {
 				sqlite3_bind_null(stmt, 5);
 			}
-			char* channelid;
+			char* channelid = NULL;
 			GenerateID(&channelid);
 			sqlite3_bind_text(stmt, 6, channelid, -1, SQLITE_STATIC);
 
@@ -1323,7 +1323,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					goto finishresp;
 				}
 				InsertError(responsebuild, 0);
-			} else{
+			} else {
 				InsertError(responsebuild, 2);
 			}
 		} else if (strcmp(endpoint, "JoinSpace") == 0) {
@@ -1382,44 +1382,51 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				cJSON_GetObjectItem(profile, "display_name"));
 			char* pfp =
 				cJSON_GetStringValue(cJSON_GetObjectItem(profile, "avatar"));
+			int hasPfp = cJSON_GetObjectItem(profile, "avatar") ? 1 : 0; // if it was explicitly nulled we would know
 			char* banner =
 				cJSON_GetStringValue(cJSON_GetObjectItem(profile, "banner"));
 			char* desc = cJSON_GetStringValue(
 				cJSON_GetObjectItem(profile, "description"));
+			char* new_display = displayname ? strdup(displayname) : NULL;
+			char* new_pfp = pfp ? strdup(pfp) : NULL;
+			char* new_banner = banner ? strdup(banner) : NULL;
+			char* new_desc = desc ? strdup(desc) : NULL;
 
-			if (displayname)
-				newusr.displayname = displayname;
-			if (pfp)
-				newusr.pfp = pfp;
-			if (desc)
-				newusr.description = desc;
-			if (banner)
-				newusr.banner = banner;
+			YampUser tmp = *usr; // only for the DB call
+			if (new_display)
+				tmp.displayname = new_display;
+			if (hasPfp)
+				tmp.pfp = new_pfp;
+			if (new_banner)
+				tmp.banner = new_banner;
+			if (new_desc)
+				tmp.description = new_desc;
 
-			if (!UpdateUserProfile(usr->id, newusr)) {
+			if (!UpdateUserProfile(usr->id, tmp)) {
+				free(new_display);
+				free(new_pfp);
+				free(new_banner);
+				free(new_desc);
 				InsertError(responsebuild, 4);
 				goto finishresp;
 			}
 
-			if (displayname)
-				newusr.displayname = strdup(displayname);
-			if (pfp)
-				newusr.pfp = strdup(pfp);
-			if (desc)
-				newusr.description = strdup(desc);
-
-			if (name && strcmp(name, oldusr.username) != 0)
-				hashmap_delete(UsersByName, &oldusr);
-
-			hashmap_set(UsersByName, &newusr);
-			hashmap_set(UsersByID, &newusr);
-
-			if (displayname)
-				free(oldusr.displayname);
-			if (pfp)
-				free(oldusr.pfp);
-			if (desc)
-				free(oldusr.description);
+			if (new_display) {
+				free(usr->displayname);
+				usr->displayname = new_display;
+			}
+			if (new_pfp) {
+				free(usr->pfp);
+				usr->pfp = new_pfp;
+			}
+			if (new_banner) {
+				free(usr->banner);
+				usr->banner = new_banner;
+			}
+			if (new_desc) {
+				free(usr->description);
+				usr->description = new_desc;
+			}
 
 			int nids = 0;
 			char** ids =
@@ -1578,7 +1585,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			} else if (parsedchat.type == YAMP_DM) {
 				PushTyping(parsedchat.OtherGuy, usr->id, channel);
 			}
-		} else if(strcmp(endpoint,"ReactMessage") == 0){
+		} else if (strcmp(endpoint, "ReactMessage") == 0) {
 			// TODO get the channel this message is in, and secure via that
 			UserSession search;
 			search.con = *con;
@@ -1588,14 +1595,16 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			YampUser* usr = usrses->user;
-			char* msg = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "message_id"));
-			char* codepoint = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "emoji"));
-			if(!(msg && codepoint)){
+			char* msg = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "message_id"));
+			char* codepoint = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "emoji"));
+			if (!(msg && codepoint)) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
 			InsertReactionForMessageID(msg, usr->id, codepoint);
-		} else if(strcmp(endpoint,"UnreactMessage")==0){
+		} else if (strcmp(endpoint, "UnreactMessage") == 0) {
 			// TODO same as above TODO
 			UserSession search;
 			search.con = *con;
@@ -1605,14 +1614,16 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			YampUser* usr = usrses->user;
-			char* msg = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "message_id"));
-			char* codepoint = cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "emoji"));
-			if(!(msg && codepoint)){
+			char* msg = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "message_id"));
+			char* codepoint = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "emoji"));
+			if (!(msg && codepoint)) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
 			RemoveReaction(msg, usr->id, codepoint);
-		} else if(strcmp(endpoint,"SetStatus")==0){
+		} else if (strcmp(endpoint, "SetStatus") == 0) {
 			// TODO same as above TODO
 			UserSession search;
 			search.con = *con;
@@ -1622,7 +1633,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			YampUser* usr = usrses->user;
-			
+
 		} else {
 			// Invalid endpoint!?
 			InsertError(responsebuild, 3);
@@ -1631,7 +1642,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 		printf("no req november\n");
 	}
 finishresp:
-	cJSON_Delete(PayloadParsed);
+	cJSON_Delete(WireParsed);
 	cJSON_AddItemToObject(responsebuild, "response", responsepayload);
 	char* resp = cJSON_PrintUnformatted(responsebuild);
 	(*response) = resp;

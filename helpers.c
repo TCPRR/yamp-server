@@ -49,6 +49,17 @@ int YAMPProcessWhere(char* where, char* curUserID, chat* out) {
 		return TRUE;
 	}
 }
+
+
+// fuck glib embrace this shit
+void FreeStrList(char** arr, int cnt){
+	for(int i = 0; i<cnt; i++){
+		free(arr[i]);
+	}
+	free(arr);
+}
+
+
 uint64_t hmap_username_hash(const void* item, uint64_t seed0, uint64_t seed1) {
 	return hashmap_sip(((YampUser*)item)->username, strlen(((YampUser*)item)->username),
 					   seed0, seed1);

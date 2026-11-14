@@ -191,22 +191,30 @@ void DisconnectClient(int i) {
 	YampUser* usr = FindUserByFD(sd);
 	if (usr) {
 		int cnt;
-		char** relatedpeople = CollectRelatedUserIDs(usr->username, NULL, &cnt);
+		char** relatedpeople =
+			CollectRelatedUserIDs(usr->username, usr->id, &cnt);
 		YampStatus* offline_stat = CreateOfflineStatus();
 		for (int j = 0; j < cnt; j++) {
-			PushStatusUpdate(relatedpeople[j], usr->id,
-							 offline_stat);
+			PushStatusUpdate(relatedpeople[j], usr->id, offline_stat);
 		}
 		FreeStatusObject(offline_stat);
-		hashmap_delete(UsersByID, usr);
-		hashmap_delete(UsersByName, usr);
+		FreeStrList(relatedpeople, cnt);
 		UserSession* ses = usr->sessions;
-		while (ses){
-			FreeUserObject(ses->user);
-			free(ses->device);
-			free(ses->token);
-			hashmap_delete(UserSessionsByFD, ses);
-			ses = ses->next;
+		hashmap_delete(UserSessionsByFD, ses);
+		if (ses->prev)
+			ses->prev->next = ses->next;
+		else
+			usr->sessions = ses->next;
+		if (ses->next)
+			ses->next->prev = ses->prev;
+		free(ses->device);
+		free(ses->token);
+		free(ses);
+
+		if (!usr->sessions) { // last device gone
+			hashmap_delete(UsersByID, usr);
+			hashmap_delete(UsersByName, usr);
+			FreeUserObject(usr);
 		}
 	}
 
@@ -224,8 +232,9 @@ int main() {
 							  hmap_username_compare, hmap_username_free, NULL);
 	UsersByID = hashmap_new(sizeof(YampUser), 256, 0, 0, hmap_userid_hash,
 							hmap_userid_compare, hmap_userid_free, NULL);
-	UserSessionsByFD = hashmap_new(sizeof(UserSession), 256, 0, 0, hmap_session_hash,
-							hmap_session_compare, hmap_session_free, NULL);
+	UserSessionsByFD =
+		hashmap_new(sizeof(UserSession), 256, 0, 0, hmap_session_hash,
+					hmap_session_compare, hmap_session_free, NULL);
 
 	sqlite3_open("yamp.db", &DB);
 	int db_init_fd = open("yamp.db.sql", O_RDONLY);
