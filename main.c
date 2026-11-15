@@ -191,15 +191,10 @@ void DisconnectClient(int i) {
 	YampUser* usr = FindUserByFD(sd);
 	if (usr) {
 		int cnt;
-		char** relatedpeople =
-			CollectRelatedUserIDs(usr->username, usr->id, &cnt);
-		YampStatus* offline_stat = CreateOfflineStatus();
-		for (int j = 0; j < cnt; j++) {
-			PushStatusUpdate(relatedpeople[j], usr->id, offline_stat);
+		UserSession* ses = FindSessionByFD(sd);
+		if(!ses){
+			return;
 		}
-		FreeStatusObject(offline_stat);
-		FreeStrList(relatedpeople, cnt);
-		UserSession* ses = usr->sessions;
 		hashmap_delete(UserSessionsByFD, ses);
 		if (ses->prev)
 			ses->prev->next = ses->next;
@@ -212,6 +207,14 @@ void DisconnectClient(int i) {
 		free(ses);
 
 		if (!usr->sessions) { // last device gone
+			char** relatedpeople = CollectRelatedUserIDs(usr->id, 0, &cnt);
+			YampStatus* offline_stat = CreateOfflineStatus();
+			for (int j = 0; j < cnt; j++) {
+				PushStatusUpdate(relatedpeople[j], usr->id, offline_stat);
+			}
+			FreeStatusObject(offline_stat);
+			FreeStrList(relatedpeople, cnt);
+
 			hashmap_delete(UsersByID, usr);
 			hashmap_delete(UsersByName, usr);
 			FreeUserObject(usr);

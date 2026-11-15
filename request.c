@@ -26,11 +26,13 @@ static const ErrorData errors[] = {
 	{7, "Not allowed as this user"},
 	{8, "Already friends"},
 	{9, "You cannot friend yourself (That's schizophrenia)"},
-	{10, "No such object (user/space)"},
-	{11, "No such channel, malformed where field?"},
+	{10, "No such object"},
+	{11, "No such channel, malformed channel field?"},
 	{12, "Above the maximum length of a text field"},
 	{13, "Replied message does not exist"},
 	{14, "Already in this space"},
+	{15, "The group chat is full!"},
+	{16, "Malformed envelope"},
 };
 
 static const char* ErrorMessage(int code) {
@@ -73,11 +75,11 @@ static void FreeIDList(char** list, int n) {
 	free(list);
 }
 
-char** CollectRelatedUserIDs(const char* username, const char* selfid,
+char** CollectRelatedUserIDs(const char* selfid, int includeSelf,
 							 int* count) {
 	char** list = NULL;
 	*count = 0;
-	if (selfid) {
+	if (includeSelf && selfid) {
 		AddUniqueID(&list, count, selfid);
 	}
 
@@ -320,7 +322,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					cJSON_AddArrayToObject(responsepayload, "outgoing_fq");
 				for (int i = 0; i < c; i++) {
 					cJSON* user = NULL;
-					if (CreateUserJSONFromUsername(fql[i].username, &user) &&
+					if (CreateUserJSONFromID(fql[i].id, &user) &&
 						user) {
 						if (fql[i].outgoing) {
 							cJSON_AddItemToArray(outfq, user);
@@ -328,7 +330,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 							cJSON_AddItemToArray(incfq, user);
 						}
 					}
-					free(fql[i].username);
+					free(fql[i].id);
 				}
 				free(fql);
 				if (friends) {
@@ -599,7 +601,33 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				InsertError(responsebuild, 2);
 			}
 		} else if (strcmp(endpoint, "RemoveFromGC") == 0) {
-			// TODO implement removing people from GCs, into handlers.c and here
+			UserSession search;
+			search.con = *con;
+			UserSession* usrses = hashmap_get(UserSessionsByFD, &search);
+			if (!usrses) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
+			YampUser* usr = usrses->user;
+			char* userid = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "user"));
+			char* gcid =
+				cJSON_GetStringValue(cJSON_GetObjectItem(PayloadParsed, "gc"));
+			if (!userid) {
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			if (!gcid) {
+				InsertError(responsebuild, 3);
+				goto finishresp;
+			}
+			if (IsGCOwner(usr->id, gcid)) {
+				RemoveMemberFromGC(userid, gcid);
+				InsertError(responsebuild, 0);
+			} else {
+				InsertError(responsebuild, 2);
+			}
+
 		} else if (strcmp(endpoint, "ListSpaceMembers") == 0) {
 			UserSession search;
 			search.con = *con;
@@ -1430,7 +1458,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 			int nids = 0;
 			char** ids =
-				CollectRelatedUserIDs(newusr.username, newusr.id, &nids);
+				CollectRelatedUserIDs(newusr.id,1, &nids);
 			for (int i = 0; i < nids; i++)
 				PushProfileUpdate(ids[i], newusr.id);
 			FreeIDList(ids, nids);

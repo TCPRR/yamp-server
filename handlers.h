@@ -4,7 +4,7 @@
 #include "globals.h"
 #include "network.h"
 typedef struct {
-    char *username;     // the other mf
+    char *id;     // the other mf
     int   outgoing;     // 1 = you sent it, 0 = you received it
 } FriendReqEntry;
 
@@ -23,11 +23,13 @@ void FreeStatusObject(YampStatus* stat);
 YampUser* ParseUserJSON(cJSON* rawusr);
 cJSON *CreateUserJSON(YampUser *user);
 int CreateUserJSONFromUsername(const char *name, cJSON **output);
+int CreateUserJSONFromID(const char* id, cJSON** output);
 
 int CreateUserObjectFromID(const char* id, YampUser** output);
 int CreateUserSelfJSONFromID(char* name, cJSON** output);
 int CreateUserSelfJSONFromUsername(char* name, cJSON** output);
 void FreeUserObject(YampUser* u);
+void FreeUserArray(YampUser** arr, int n);
 
 
 // Functions
@@ -71,19 +73,21 @@ int PushUpdatedChannelsList(char* who, char* space_id);
 int PushNewFriend(char* who, char* user_id);
 YampUser ParseUserObject(cJSON* rawusr);
 int UpdateUserProfile(char* id, YampUser newprofile);
+char* GetSpaceFromChannelID(char* channel_id);
 
 int PushNewConversation(char* userid, YampChannel* conv);
 
-// Group chat funcs
+// GCs
 void CreateGC(YampUser* creator, int ninitmember, YampUser** initmembers);
 int UpdateGC(YampChannel* conv);
 int IsGCOwner(char* uid, char* gcid);
 int IsInGC(char* uid, char* gcid);
 cJSON* ListGCMembersJSONFromID(const char* id);
 int ListGCMembersObjectsFromID(char* id, YampUser*** out);
-void FreeUserArray(YampUser** arr, int n);
 int AddMemberToGC(char* uid, char* gcid);
+int RemoveMemberFromGC(const char* uid, const char* gcid);
 
+// DMs
 YampChannel* BuildDMConv(const char* a, const char* b);
 int CreateDM(char* starter, char* recipient);
 int HasDMs(char* starter, char* recipient);
@@ -92,21 +96,21 @@ int PushJoinChannel(char* toID, char* fromID, char* channel);
 int PushLeftChannel(char* toID, char* fromID, char* channel);
 int PushTyping(char* toID, char* fromID, char* channel);
 
+// Message types
 YampMessage* CreateMessageTypeFromID(char* id);
 int DeleteMessage(char* id);
 void FreeMessageFields(YampMessage* msg);
 void FreeMessageObject(YampMessage* msg);
 int PushMessageDeleted(char* toID, char* message);
 
+// Security
 int CanAccessChat(const YampUser* usr, char* id);
+int CanAccessChannel(const YampUser* usr, const YampChannel* ch);
 
-char* GetSpaceFromChannelID(char* channel_id);
-
-
+// Attachments
 YampAttachment* ParseAttachmentJSON(cJSON* json);
 void FreeAttachmentTypeFields(YampAttachment* attach);
 YampAttachment* DupAttachmentObject(YampAttachment* attachment);
-
 
 // Reactions
 cJSON* CreateReactionJSON(const YampReaction* r);

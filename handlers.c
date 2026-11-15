@@ -917,10 +917,10 @@ int CanAccessChat(const YampUser* usr, char* id) {
 	if (!ok) {
 		return 0;
 	}
-	switch (cchat.type) {
-	case YAMP_SPACE_TEXT: {
+	if(YAMP_IS_SPACE_TYPE(cchat.type)){
 		return IsInSpaceViaUserID(usr->id, GetSpaceFromChannelID(id));
 	}
+	switch (cchat.type) {
 	case YAMP_GC:
 		return IsInGC(usr->id, cchat.GC_ID);
 	case YAMP_DM:
@@ -928,6 +928,39 @@ int CanAccessChat(const YampUser* usr, char* id) {
 	default:
 		return 0;
 	}
+}
+int CanAccessChannel(const YampUser* usr, const YampChannel* ch) {
+    if (!usr || !ch) return 0;
+
+    if (YAMP_IS_SPACE_TYPE(ch->type))
+        return IsInSpaceViaUserID(usr->id, GetSpaceFromChannelID(ch->id));
+
+    switch (ch->type) {
+    case YAMP_GC:
+        return IsInGC(usr->id, ch->id + 1); // skip the type header (&)
+
+    case YAMP_DM: {
+        if (ch->npeople) {
+            YampUser* const* people = (YampUser* const*)(ch + 1);
+            for (int i = 0; i < ch->npeople; i++)
+                if (people[i] && strcmp(people[i]->id, usr->id) == 0)
+                    return 1;
+            return 0;
+        }
+
+        char* sep = strchr(ch->id, '|');
+        if (!sep) return 0;
+
+        size_t ulen = strlen(usr->id);
+        size_t alen = (size_t)(sep - ch->id);
+
+        if (alen == ulen && memcmp(ch->id, usr->id, ulen) == 0) return 1;
+        return strcmp(sep + 1, usr->id) == 0;
+    }
+
+    default:
+        return 0;
+    }
 }
 int ListSpaceMembersObjectsFromID(char* id, YampUser*** out) {
 	const char* sql =
@@ -1635,6 +1668,23 @@ int AddMemberToGC(char* uid, char* gcid) {
 	sqlite3_finalize(stmt);
 	return 0;
 }
+int RemoveMemberFromGC(const char* uid, const char* gcid) {
+    const char* sql =
+        "DELETE FROM \"user-gc\" WHERE \"user-id\"=? AND \"gc-id\"=?";
+    sqlite3_stmt* stmt = NULL;
+
+    sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, gcid, -1, SQLITE_STATIC);
+
+    int ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	int changed = sqlite3_changes(DB) > 0;
+    sqlite3_finalize(stmt);
+	if(!changed){
+		return -1; // nothing changed but should not block if()'s
+	}
+    return ok;
+}
 
 cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit) {
 	static const char* sql_newest =
@@ -1757,7 +1807,11 @@ int PushRecvIM(char* toID, char* channel, YampMessage* msg, int nonce) {
 
 int PushFQ(char* toID, char* fromID) {
 	cJSON* payload = cJSON_CreateObject();
-	cJSON_AddStringToObject(payload, "from", fromID);
+	cJSON* user;
+	if(!CreateUserJSONFromID(fromID,&user)){
+		return 0;
+	}
+	cJSON_AddItemToObject(payload, "user", user);
 	return PushEventToUser(toID, "IncomingFriendReq", payload);
 }
 
@@ -1897,7 +1951,7 @@ int ListFriendReqs(const char* user, FriendReqEntry** out) {
 			*out = g;
 		}
 		int outgoing = strcmp(s, user) == 0;
-		(*out)[count].username = strdup(outgoing ? r : s);
+		(*out)[count].id = strdup(outgoing ? r : s);
 		(*out)[count].outgoing = outgoing;
 		count++;
 	}
