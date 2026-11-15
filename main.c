@@ -204,7 +204,6 @@ void DisconnectClient(int i) {
 			ses->next->prev = ses->prev;
 		free(ses->device);
 		free(ses->token);
-		free(ses);
 
 		if (!usr->sessions) { // last device gone
 			char** relatedpeople = CollectRelatedUserIDs(usr->id, 0, &cnt);

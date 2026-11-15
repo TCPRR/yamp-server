@@ -75,8 +75,7 @@ static void FreeIDList(char** list, int n) {
 	free(list);
 }
 
-char** CollectRelatedUserIDs(const char* selfid, int includeSelf,
-							 int* count) {
+char** CollectRelatedUserIDs(const char* selfid, int includeSelf, int* count) {
 	char** list = NULL;
 	*count = 0;
 	if (includeSelf && selfid) {
@@ -322,8 +321,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 					cJSON_AddArrayToObject(responsepayload, "outgoing_fq");
 				for (int i = 0; i < c; i++) {
 					cJSON* user = NULL;
-					if (CreateUserJSONFromID(fql[i].id, &user) &&
-						user) {
+					if (CreateUserJSONFromID(fql[i].id, &user) && user) {
 						if (fql[i].outgoing) {
 							cJSON_AddItemToArray(outfq, user);
 						} else {
@@ -396,7 +394,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			sqlite3_bind_text(stmt2, 4, tokenhash, -1, SQLITE_STATIC);
 			if (sqlite3_step(stmt2) != SQLITE_DONE) {
 				free(user_id);
-				InsertError(responsebuild, 3);
+				InsertError(responsebuild, 6);
 				sqlite3_finalize(stmt);
 				goto finishresp;
 			}
@@ -505,7 +503,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			if (!HasDMs(usr->id, recipient)) {
 				CreateDM(usr->id, recipient);
-				YampChannel* ch = BuildDMConv(usr->id,recipient);
+				YampChannel* ch = BuildDMConv(usr->id, recipient);
 				PushNewConversation(usr->id, ch);
 				PushNewConversation(recipient, ch);
 			}
@@ -538,7 +536,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				}
 			}
 			CreateGC(usr, validusers, parsed_initmem);
-			FreeUserArray(parsed_initmem, cJSON_GetArraySize(initial_members));
+			FreeUserArray(parsed_initmem, validusers);
 			for (int i = 0; i < validusers; i++) {
 				// PushNewConversation(parsed_initmem[0].id, YampChannel conv)
 			}
@@ -596,6 +594,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			if (IsInGC(usr->id, gcid)) {
 				AddMemberToGC(userid, gcid);
+				PushNewConversation(userid, );
 				InsertError(responsebuild, 0);
 			} else {
 				InsertError(responsebuild, 2);
@@ -757,6 +756,10 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			YampMessage* msg = CreateMessageTypeFromID(message);
+			if (!msg) {
+				InsertError(responsebuild, 7);
+				goto finishresp;
+			}
 			if (strcmp(msg->author->id, usr->id) != 0) {
 				FreeMessageObject(msg);
 				InsertError(responsebuild, 7);
@@ -896,13 +899,20 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			cJSON_AddBoolToObject(responsepayload, "has_more", has_more);
 			InsertError(responsebuild, 0);
 		} else if (strcmp(endpoint, "RepositionChannel") == 0) {
+			UserSession search;
+			search.con = *con;
+			UserSession* usrses = hashmap_get(UserSessionsByFD, &search);
+			if (!usrses) {
+				InsertError(responsebuild, 1);
+				goto finishresp;
+			}
 			char* space = cJSON_GetStringValue(
 				cJSON_GetObjectItem(PayloadParsed, "space"));
-			char* name = cJSON_GetStringValue(
-				cJSON_GetObjectItem(PayloadParsed, "name"));
+			char* id = cJSON_GetStringValue(
+				cJSON_GetObjectItem(PayloadParsed, "channel_id"));
 			cJSON* positem = cJSON_GetObjectItem(PayloadParsed, "pos");
 
-			if (!space || !name || !cJSON_IsNumber(positem)) {
+			if (!space || !id || !cJSON_IsNumber(positem)) {
 				InsertError(responsebuild, 3);
 				goto finishresp;
 			}
@@ -910,7 +920,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			int newpos = positem->valueint;
 
 			const char* getsql = "SELECT \"pos\" FROM \"channels\" "
-								 "WHERE \"space\" = ? AND \"name\" = ?";
+								 "WHERE \"space\" = ? AND \"id\" = ?";
 
 			sqlite3_stmt* stmt;
 			if (sqlite3_prepare_v2(DB, getsql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -919,7 +929,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 
 			sqlite3_bind_text(stmt, 1, space, -1, SQLITE_STATIC);
-			sqlite3_bind_text(stmt, 2, name, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 2, id, -1, SQLITE_STATIC);
 
 			if (sqlite3_step(stmt) != SQLITE_ROW) {
 				sqlite3_finalize(stmt);
@@ -935,7 +945,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				goto finishresp;
 			}
 			const char* tempsql = "UPDATE \"channels\" SET \"pos\" = -1 "
-								  "WHERE \"space\" = ? AND \"name\" = ?";
+								  "WHERE \"space\" = ? AND \"id\" = ?";
 
 			if (sqlite3_prepare_v2(DB, tempsql, -1, &stmt, NULL) != SQLITE_OK) {
 				InsertError(responsebuild, 1);
@@ -943,7 +953,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 
 			sqlite3_bind_text(stmt, 1, space, -1, SQLITE_STATIC);
-			sqlite3_bind_text(stmt, 2, name, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 2, id, -1, SQLITE_STATIC);
 			sqlite3_step(stmt);
 			sqlite3_finalize(stmt);
 
@@ -981,7 +991,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			sqlite3_finalize(stmt);
 
 			const char* setsql = "UPDATE \"channels\" SET \"pos\" = ? "
-								 "WHERE \"space\" = ? AND \"name\" = ?";
+								 "WHERE \"space\" = ? AND \"id\" = ?";
 
 			if (sqlite3_prepare_v2(DB, setsql, -1, &stmt, NULL) != SQLITE_OK) {
 				InsertError(responsebuild, 1);
@@ -990,7 +1000,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 
 			sqlite3_bind_int(stmt, 1, newpos);
 			sqlite3_bind_text(stmt, 2, space, -1, SQLITE_STATIC);
-			sqlite3_bind_text(stmt, 3, name, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 3, id, -1, SQLITE_STATIC);
 
 			sqlite3_step(stmt);
 			sqlite3_finalize(stmt);
@@ -1410,7 +1420,9 @@ int ProcessRequest(char* payload, char** response, int sockid,
 				cJSON_GetObjectItem(profile, "display_name"));
 			char* pfp =
 				cJSON_GetStringValue(cJSON_GetObjectItem(profile, "avatar"));
-			int hasPfp = cJSON_GetObjectItem(profile, "avatar") ? 1 : 0; // if it was explicitly nulled we would know
+			int hasPfp = cJSON_GetObjectItem(profile, "avatar")
+							 ? 1
+							 : 0; // if it was explicitly nulled we would know
 			char* banner =
 				cJSON_GetStringValue(cJSON_GetObjectItem(profile, "banner"));
 			char* desc = cJSON_GetStringValue(
@@ -1457,8 +1469,7 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 
 			int nids = 0;
-			char** ids =
-				CollectRelatedUserIDs(newusr.id,1, &nids);
+			char** ids = CollectRelatedUserIDs(newusr.id, 1, &nids);
 			for (int i = 0; i < nids; i++)
 				PushProfileUpdate(ids[i], newusr.id);
 			FreeIDList(ids, nids);

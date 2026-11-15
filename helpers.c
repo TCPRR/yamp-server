@@ -8,6 +8,17 @@
 #include "globals.h"
 #include "handlers.h"
 
+// Uses the derivative ID system to tell the type via the channel ID
+uint64_t GuessChannelType(char* id){
+	if(*id == '&'){
+		return YAMP_GC;
+	}
+	if(strchr(id,'|')){
+		return YAMP_DM;
+	}
+	return YAMP_SPACE_TEXT; // Some sort of space channel, default to text channels
+}
+
 int YAMPProcessWhere(char* where, char* curUserID, chat* out) {
 	chat retval = {0};
 	if (*where == '&') {
@@ -37,12 +48,14 @@ int YAMPProcessWhere(char* where, char* curUserID, chat* out) {
 		retval.ChannelName = NULL;
 		retval.type = YAMP_DM;
 		retval.where = strdup(where);
+		if(curUserID){
 		if (strcmp(firstUsr, curUserID) == 0) {
 			retval.OtherGuy = minus + 1;
 		} else if (strcmp(minus + 1, curUserID) == 0) {
 			retval.OtherGuy = firstUsr;
 		} else {
 			return FALSE; // who the FUCK are you
+		}
 		}
 		retval.GuildName = NULL;
 		*out = retval;
@@ -148,7 +161,6 @@ static YampChannel* SpaceChannelFromRow(sqlite3_stmt* st) {
 	ch->name = dup0(name);
 	snprintf(ch->parent, sizeof ch->parent, "%s", parent ? parent : "");
 	snprintf(ch->id, sizeof ch->id, "%s", cid ? cid : "");
-	snprintf(ch->space, sizeof ch->space, "%s", space ? space : "");
 
 	if (!ch->name) {
 		FreeYampChannel(ch);

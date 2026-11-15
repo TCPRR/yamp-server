@@ -80,17 +80,20 @@ typedef struct{
 	char* key;
 	char* val;
 } MainRespOverride;
+
 typedef struct YampChannel {
 	int type;
-	char id[16+1+16+1]; // DM channel IDs are the maximum this field can get, which totals up to 34 (w/ null terminator included)
+	char id[16+1+16+1];
 	char* name;
 	struct YampChannel* children;
 	int nchildren;
 	int pos;
-	int npeople;
-	char* space;
 	char* parent;
+	int npeople;
+	YampUser** people;
 } YampChannel;
+
+
 typedef struct{
 	char* url;
 	char* mime;

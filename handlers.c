@@ -592,7 +592,6 @@ static cJSON* CreateMembersArray(cJSON* obj, YampUser* const* people, int n) {
 }
 
 cJSON* CreateConvObject(const YampChannel* conv) {
-	YampUser* const* people = (YampUser* const*)(conv + 1);
 	char addr_id[2 * 16 + 2];
 	int n;
 
@@ -602,8 +601,8 @@ cJSON* CreateConvObject(const YampChannel* conv) {
 			return NULL;
 		n = 2;
 		{
-			const char* a = people[0]->id;
-			const char* b = people[1]->id;
+			const char* a = conv->people[0]->id;
+			const char* b = conv->people[1]->id;
 			if (strncmp(a, b, 16) > 0) {
 				const char* t = a;
 				a = b;
@@ -629,7 +628,7 @@ cJSON* CreateConvObject(const YampChannel* conv) {
 
 	if (!cJSON_AddStringToObject(obj, "id", addr_id) ||
 		!cJSON_AddNumberToObject(obj, "type", conv->type) ||
-		!CreateMembersArray(obj, people, n)) {
+		!CreateMembersArray(obj, conv->people, n)) {
 		cJSON_Delete(obj);
 		return NULL;
 	}
@@ -655,7 +654,7 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 	conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser*));
 	if (!conv)
 		goto fail;
-	YampUser** dm_people = (YampUser**)(conv + 1);
+	YampUser** dm_people = conv->people;
 
 	if (sqlite3_prepare_v2(DB, dm_sql, -1, &st, NULL) != SQLITE_OK)
 		goto fail;
@@ -721,7 +720,7 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 					goto fail;
 				conv = grown;
 			}
-			YampUser** people = (YampUser**)(conv + 1);
+			YampUser** people = conv->people;
 			if (CreateUserObjectFromID(uid, &people[n]))
 				conv->npeople = ++n;
 		}
@@ -917,7 +916,7 @@ int CanAccessChat(const YampUser* usr, char* id) {
 	if (!ok) {
 		return 0;
 	}
-	if(YAMP_IS_SPACE_TYPE(cchat.type)){
+	if (YAMP_IS_SPACE_TYPE(cchat.type)) {
 		return IsInSpaceViaUserID(usr->id, GetSpaceFromChannelID(id));
 	}
 	switch (cchat.type) {
@@ -930,37 +929,40 @@ int CanAccessChat(const YampUser* usr, char* id) {
 	}
 }
 int CanAccessChannel(const YampUser* usr, const YampChannel* ch) {
-    if (!usr || !ch) return 0;
+	if (!usr || !ch)
+		return 0;
 
-    if (YAMP_IS_SPACE_TYPE(ch->type))
-        return IsInSpaceViaUserID(usr->id, GetSpaceFromChannelID(ch->id));
+	if (YAMP_IS_SPACE_TYPE(ch->type))
+		return IsInSpaceViaUserID(usr->id, GetSpaceFromChannelID(ch->id));
 
-    switch (ch->type) {
-    case YAMP_GC:
-        return IsInGC(usr->id, ch->id + 1); // skip the type header (&)
+	switch (ch->type) {
+	case YAMP_GC:
+		return IsInGC(usr->id, ch->id);
 
-    case YAMP_DM: {
-        if (ch->npeople) {
-            YampUser* const* people = (YampUser* const*)(ch + 1);
-            for (int i = 0; i < ch->npeople; i++)
-                if (people[i] && strcmp(people[i]->id, usr->id) == 0)
-                    return 1;
-            return 0;
-        }
+	case YAMP_DM: {
+		if (ch->npeople) {
+			YampUser* const* people = (YampUser* const*)(ch + 1);
+			for (int i = 0; i < ch->npeople; i++)
+				if (people[i] && strcmp(people[i]->id, usr->id) == 0)
+					return 1;
+			return 0;
+		}
 
-        char* sep = strchr(ch->id, '|');
-        if (!sep) return 0;
+		char* sep = strchr(ch->id, '|');
+		if (!sep)
+			return 0;
 
-        size_t ulen = strlen(usr->id);
-        size_t alen = (size_t)(sep - ch->id);
+		size_t ulen = strlen(usr->id);
+		size_t alen = (size_t)(sep - ch->id);
 
-        if (alen == ulen && memcmp(ch->id, usr->id, ulen) == 0) return 1;
-        return strcmp(sep + 1, usr->id) == 0;
-    }
+		if (alen == ulen && memcmp(ch->id, usr->id, ulen) == 0)
+			return 1;
+		return strcmp(sep + 1, usr->id) == 0;
+	}
 
-    default:
-        return 0;
-    }
+	default:
+		return 0;
+	}
 }
 int ListSpaceMembersObjectsFromID(char* id, YampUser*** out) {
 	const char* sql =
@@ -1020,9 +1022,9 @@ int JoinSpaceViaInvite(const char* user_id, const char* code,
 	if (sqlite3_exec(DB, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK)
 		return 4;
 
-	if (sqlite3_prepare_v2(DB,
-						   "SELECT space, uses FROM \"space-invites\" WHERE code = ?",
-						   -1, &stmt, NULL) != SQLITE_OK)
+	if (sqlite3_prepare_v2(
+			DB, "SELECT space, uses FROM \"space-invites\" WHERE code = ?", -1,
+			&stmt, NULL) != SQLITE_OK)
 		goto fail;
 	sqlite3_bind_text(stmt, 1, code, -1, SQLITE_STATIC);
 	if (sqlite3_step(stmt) != SQLITE_ROW) {
@@ -1058,8 +1060,9 @@ int JoinSpaceViaInvite(const char* user_id, const char* code,
 
 	if (uses > 0) {
 		const char* usql =
-			uses == 1 ? "DELETE FROM \"space-invites\" WHERE code = ?"
-					  : "UPDATE \"space-invites\" SET uses = uses - 1 WHERE code = ?";
+			uses == 1
+				? "DELETE FROM \"space-invites\" WHERE code = ?"
+				: "UPDATE \"space-invites\" SET uses = uses - 1 WHERE code = ?";
 		if (sqlite3_prepare_v2(DB, usql, -1, &stmt, NULL) != SQLITE_OK)
 			goto fail;
 		sqlite3_bind_text(stmt, 1, code, -1, SQLITE_STATIC);
@@ -1443,20 +1446,21 @@ void InsertMessage(YampMessage* msg) {
 }
 YampChannel* BuildDMConv(const char* a, const char* b) {
 	YampChannel* conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser*));
-	if (!conv) return NULL;
+	if (!conv)
+		return NULL;
 	conv->type = YAMP_DM;
 	conv->npeople = 2;
-	YampUser** p = (YampUser**)(conv + 1);
+	YampUser** p = conv->people;
 	if (!CreateUserObjectFromID(a, &p[0]) ||
-	    !CreateUserObjectFromID(b, &p[1])) {
-		FreeUserObject(p[0]);   // NULL-safe
+		!CreateUserObjectFromID(b, &p[1])) {
+		FreeUserObject(p[0]); // NULL-safe
 		free(conv);
 		return NULL;
 	}
 	return conv;
 }
 void FreeDMConv(YampChannel* conv) {
-	YampUser** p = (YampUser**)(conv + 1);
+	YampUser** p = conv->people;
 	FreeUserObject(p[0]);
 	FreeUserObject(p[1]);
 	free(conv);
@@ -1515,6 +1519,17 @@ char* JoinUsernames(const YampUser* people, int n) {
 	}
 	*p = '\0';
 	return out;
+}
+YampChannel* CreateChannelObjectFromID(char* id){
+	int type = GuessChannelType(id);
+	if(type == YAMP_GC){
+	} else if (type == YAMP_DM){
+
+	} else if (YAMP_IS_SPACE_TYPE(type)){
+
+	}
+}
+cJSON* CreateChannelJSONFromID(char* id){
 }
 void CreateGC(YampUser* creator, int ninitmember, YampUser** initmembers) {
 	const char* sql = "INSERT INTO \"gc\" (\"id\", \"owner\") VALUES (?, ?)";
@@ -1669,21 +1684,21 @@ int AddMemberToGC(char* uid, char* gcid) {
 	return 0;
 }
 int RemoveMemberFromGC(const char* uid, const char* gcid) {
-    const char* sql =
-        "DELETE FROM \"user-gc\" WHERE \"user-id\"=? AND \"gc-id\"=?";
-    sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"DELETE FROM \"user-gc\" WHERE \"user-id\"=? AND \"gc-id\"=?";
+	sqlite3_stmt* stmt = NULL;
 
-    sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
-    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, gcid, -1, SQLITE_STATIC);
+	sqlite3_prepare_v2(DB, sql, -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 2, gcid, -1, SQLITE_STATIC);
 
-    int ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	int ok = (sqlite3_step(stmt) == SQLITE_DONE);
 	int changed = sqlite3_changes(DB) > 0;
-    sqlite3_finalize(stmt);
-	if(!changed){
+	sqlite3_finalize(stmt);
+	if (!changed) {
 		return -1; // nothing changed but should not block if()'s
 	}
-    return ok;
+	return ok;
 }
 
 cJSON* GetMessageHistoryPage(const char* where, const char* before, int limit) {
@@ -1808,7 +1823,7 @@ int PushRecvIM(char* toID, char* channel, YampMessage* msg, int nonce) {
 int PushFQ(char* toID, char* fromID) {
 	cJSON* payload = cJSON_CreateObject();
 	cJSON* user;
-	if(!CreateUserJSONFromID(fromID,&user)){
+	if (!CreateUserJSONFromID(fromID, &user)) {
 		return 0;
 	}
 	cJSON_AddItemToObject(payload, "user", user);
