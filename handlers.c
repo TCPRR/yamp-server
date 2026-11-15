@@ -634,6 +634,13 @@ cJSON* CreateConvObject(const YampChannel* conv) {
 	}
 	return obj;
 }
+void FreeChannelMembers(YampChannel* c) {
+	if (!c) return;
+	for (int i = 0; i < c->npeople; i++)
+		FreeUserObject(c->people[i]);
+	free(c->people);
+	free(c);
+}
 int CreateConvListFromUserID(const char* id, cJSON** output) {
 	static const char* dm_sql = "SELECT starter, recipient FROM dm "
 								"WHERE starter = ?1 OR recipient = ?1";
@@ -643,113 +650,93 @@ int CreateConvListFromUserID(const char* id, cJSON** output) {
 		"SELECT \"user-id\" FROM \"user-gc\" WHERE \"gc-id\" = ?1";
 
 	cJSON* array = cJSON_CreateArray();
-	if (!array)
-		return 0;
+	if (!array) return 0;
 
 	sqlite3_stmt *st = NULL, *ms = NULL;
 	YampChannel* conv = NULL;
 	int rc;
 
-	// dms always have 2 people so we can just use that fixed
-	conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser*));
-	if (!conv)
-		goto fail;
-	YampUser** dm_people = conv->people;
+	conv = calloc(1, sizeof *conv);
+	if (!conv) goto fail;
+	conv->people = calloc(2, sizeof(YampUser*));
+	if (!conv->people) goto fail;
+	conv->type = YAMP_DM;
+	conv->npeople = 2;
 
-	if (sqlite3_prepare_v2(DB, dm_sql, -1, &st, NULL) != SQLITE_OK)
-		goto fail;
+	if (sqlite3_prepare_v2(DB, dm_sql, -1, &st, NULL) != SQLITE_OK) goto fail;
 	sqlite3_bind_text(st, 1, id, -1, SQLITE_STATIC);
 
 	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
 		const char* a = (const char*)sqlite3_column_text(st, 0);
 		const char* b = (const char*)sqlite3_column_text(st, 1);
-		if (!a || !b)
-			continue;
+		if (!a || !b) continue;
 
-		conv->type = YAMP_DM;
-		conv->npeople = 2;
-
-		memset(dm_people, 0, 2 * sizeof(YampUser*));
-		if (CreateUserObjectFromID(a, &dm_people[0]) &&
-			CreateUserObjectFromID(b, &dm_people[1])) {
+		if (CreateUserObjectFromID(a, &conv->people[0]) &&
+		    CreateUserObjectFromID(b, &conv->people[1])) {
 			cJSON* obj = CreateConvObject(conv);
 			if (obj && !cJSON_AddItemToArray(array, obj))
 				cJSON_Delete(obj);
 		}
-		FreeUserObject(dm_people[0]);
-		FreeUserObject(dm_people[1]);
+		FreeUserObject(conv->people[0]); conv->people[0] = NULL;
+		FreeUserObject(conv->people[1]); conv->people[1] = NULL;
 	}
-	if (rc != SQLITE_DONE)
-		goto fail;
-	sqlite3_finalize(st);
-	st = NULL;
-	free(conv);
-	conv = NULL;
+	if (rc != SQLITE_DONE) goto fail;
+	sqlite3_finalize(st); st = NULL;
+	FreeChannelMembers(conv);  conv = NULL;
 
-	if (sqlite3_prepare_v2(DB, gc_sql, -1, &st, NULL) != SQLITE_OK)
-		goto fail;
+	if (sqlite3_prepare_v2(DB, gc_sql, -1, &st, NULL) != SQLITE_OK) goto fail;
 	sqlite3_bind_text(st, 1, id, -1, SQLITE_STATIC);
 
 	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
 		const char* gid = (const char*)sqlite3_column_text(st, 0);
-		if (!gid)
-			continue;
+		if (!gid) continue;
 
 		size_t cap = 8;
-		conv = calloc(1, sizeof *conv + cap * sizeof(YampUser*));
-		if (!conv)
-			goto fail;
+		conv = calloc(1, sizeof *conv);
+		if (!conv) goto fail;
+		conv->people = calloc(cap, sizeof(YampUser*));
+		if (!conv->people) goto fail;
 		conv->type = YAMP_GC;
 		snprintf(conv->id, sizeof conv->id, "%s", gid);
 
-		if (sqlite3_prepare_v2(DB, mem_sql, -1, &ms, NULL) != SQLITE_OK)
-			goto fail;
+		if (sqlite3_prepare_v2(DB, mem_sql, -1, &ms, NULL) != SQLITE_OK) goto fail;
 		sqlite3_bind_text(ms, 1, gid, -1, SQLITE_STATIC);
 
-		int n = 0, mrc;
+		int mrc;
 		while ((mrc = sqlite3_step(ms)) == SQLITE_ROW) {
 			const char* uid = (const char*)sqlite3_column_text(ms, 0);
-			if (!uid)
-				continue;
+			if (!uid) continue;
 
-			if ((size_t)n == cap) {
+			if ((size_t)conv->npeople == cap) {
+				YampUser** g = realloc(conv->people, cap * 2 * sizeof *g);
+				if (!g) goto fail;
+				conv->people = g;
+				memset(g + cap, 0, cap * sizeof *g);
 				cap *= 2;
-				YampChannel* grown =
-					realloc(conv, sizeof *conv + cap * sizeof(YampUser*));
-				if (!grown)
-					goto fail;
-				conv = grown;
 			}
-			YampUser** people = conv->people;
-			if (CreateUserObjectFromID(uid, &people[n]))
-				conv->npeople = ++n;
+			if (CreateUserObjectFromID(uid, &conv->people[conv->npeople]))
+				conv->npeople++;
 		}
-		sqlite3_finalize(ms);
-		ms = NULL;
-		if (mrc != SQLITE_DONE)
-			goto fail;
+		sqlite3_finalize(ms); ms = NULL;
+		if (mrc != SQLITE_DONE) goto fail;
 
-		conv->npeople = n;
 		cJSON* obj = CreateConvObject(conv);
 		if (obj && !cJSON_AddItemToArray(array, obj))
 			cJSON_Delete(obj);
 
-		FreeYampChannel(conv);
-		conv = NULL;
+		FreeChannelMembers(conv); conv = NULL;
 	}
-	if (rc != SQLITE_DONE)
-		goto fail;
+	if (rc != SQLITE_DONE) goto fail;
 
 	sqlite3_finalize(st);
 	*output = array;
 	return 1;
 
 fail:
-	fprintf(stderr, "CreateConvListFromUserID failed with this db err %s\n",
-			sqlite3_errmsg(DB));
+	fprintf(stderr, "CreateConvListFromUserID failed: %s\n", sqlite3_errmsg(DB));
 	sqlite3_finalize(ms);
 	sqlite3_finalize(st);
-	free(conv);
+	FreeChannelMembers(conv);
 	cJSON_Delete(array);
 	return 0;
 }
@@ -941,7 +928,7 @@ int CanAccessChannel(const YampUser* usr, const YampChannel* ch) {
 
 	case YAMP_DM: {
 		if (ch->npeople) {
-			YampUser* const* people = (YampUser* const*)(ch + 1);
+			YampUser* const* people = ch->people;
 			for (int i = 0; i < ch->npeople; i++)
 				if (people[i] && strcmp(people[i]->id, usr->id) == 0)
 					return 1;
@@ -1445,24 +1432,27 @@ void InsertMessage(YampMessage* msg) {
 	}
 }
 YampChannel* BuildDMConv(const char* a, const char* b) {
-	YampChannel* conv = calloc(1, sizeof *conv + 2 * sizeof(YampUser*));
-	if (!conv)
-		return NULL;
+	YampChannel* conv = calloc(1, sizeof *conv);
+	if (!conv) return NULL;
+	conv->people = calloc(2, sizeof(YampUser*));
+	if (!conv->people) { free(conv); return NULL; }
 	conv->type = YAMP_DM;
 	conv->npeople = 2;
-	YampUser** p = conv->people;
-	if (!CreateUserObjectFromID(a, &p[0]) ||
-		!CreateUserObjectFromID(b, &p[1])) {
-		FreeUserObject(p[0]); // NULL-safe
+	if (!CreateUserObjectFromID(a, &conv->people[0]) ||
+	    !CreateUserObjectFromID(b, &conv->people[1])) {
+		FreeUserObject(conv->people[0]);   // NULL-safe
+		free(conv->people);
 		free(conv);
 		return NULL;
 	}
 	return conv;
 }
+
 void FreeDMConv(YampChannel* conv) {
-	YampUser** p = conv->people;
-	FreeUserObject(p[0]);
-	FreeUserObject(p[1]);
+	if (!conv) return;
+	FreeUserObject(conv->people[0]);
+	FreeUserObject(conv->people[1]);
+	free(conv->people);
 	free(conv);
 }
 int CreateDM(char* starter, char* recipient) {

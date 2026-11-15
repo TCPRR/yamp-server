@@ -12,4 +12,3 @@ extern hmap UserSessionsByFD;
 extern sqlite3 *DB;
 extern MainRespOverride* respoverrides;
 extern int nrespoverrides;
-extern int IPCSockets[MAX_IPC_CLIENTS];

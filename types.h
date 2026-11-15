@@ -38,11 +38,13 @@ typedef struct{
 typedef struct {
 	int connected;
 	int encrypt;
+	int listener;
 	int fd;
 	SSL *ssl;
 	unsigned long long LastRegistration;
 	unsigned long long LastEndpoint;
 	int ratelimited;
+	int idx; // useful for arrays of them if they are stored as ptrs
 } Connection;
 
 typedef struct YampUser YampUser;

@@ -18,18 +18,13 @@
 #include "http.h"
 #include "pthread.h"
 #include <fcntl.h>
+#include "config.h"
+#include "globals.h"
 
 #define CDN_ROOT "/var/www/yamp-http"
 #define PROXY_MAX_BYTES (8u * 1024 * 1024)
 #define PROXY_TIMEOUT_S 10L
 
-typedef struct {
-	char* http_base_url;
-	unsigned long long maxupload;
-	int gc_member_limit;
-	char* cdn_root;
-} YampConfig;
-YampConfig config;
 UploadToken* UTStack = NULL;
 pthread_mutex_t UTLock = PTHREAD_MUTEX_INITIALIZER;
 

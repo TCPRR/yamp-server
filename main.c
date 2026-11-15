@@ -28,76 +28,15 @@
 #include <pthread.h>
 #include <stdint.h>
 
-Connection client_sockets[MAX_CLIENTS] = {0};
-int IPCSockets[MAX_IPC_CLIENTS] = {0};
+#define PORT 5224
+#define SSLPORT 5225
+
+Connection** client_sockets;
+int nClients;
+int* IPCSockets;
+int nIPCClients;
 sqlite3* DB;
 
-void* UnixListener(void* args) {
-	long int fd = IPCSockets[(int)args];
-	while (1) {
-		uint32_t len;
-		int r = recv(fd, &len, 4, 0);
-		if (r == 0) {
-			return NULL;
-		}
-		len = ntohl(len);
-		char* payload = malloc(len);
-		int totaln = 0;
-		while (len > totaln) {
-			int n = recv(fd, payload + totaln, len - totaln, 0);
-			if (n <= 0) {
-				free(payload);
-				IPCSockets[(int)args] = 0;
-				return NULL;
-			}
-			totaln += n;
-		}
-		cJSON* payld = cJSON_Parse(payload);
-		if (!payld) {
-			printf("Unintelligable payload from a plugin\n");
-			return NULL;
-		}
-		char* endpoint =
-			cJSON_GetStringValue(cJSON_GetObjectItem(payld, "endpoint"));
-		cJSON* response = cJSON_CreateObject();
-		cJSON_AddItemToObject(
-			response, "reqid",
-			cJSON_Duplicate(cJSON_GetObjectItem(payld, "reqid"), 1));
-		if (strcmp(endpoint, "GetSpaceFromInvite") == 0) {
-
-		} else if (strcmp(endpoint, "GetSpaceDetails") == 0) {
-			cJSON* spacejson;
-			CreateSpaceObjectFromName(
-				cJSON_GetStringValue(cJSON_GetObjectItem(payld, "name")),
-				&spacejson);
-			if (spacejson) {
-				cJSON_AddItemToObject(response, "space", spacejson);
-				cJSON_AddBoolToObject(response, "success", 1);
-			} else {
-				cJSON_AddBoolToObject(response, "success", 0);
-			}
-		} else if (strcmp(endpoint, "SetMainRespOverride") == 0) {
-			MainRespOverride override;
-			override.key =
-				strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "key")));
-			override.val =
-				strdup(cJSON_GetStringValue(cJSON_GetObjectItem(payld, "val")));
-			printf("A main-response keypair override was set, %s is now %s\n",
-				   override.key, override.val);
-			respoverrides = realloc(respoverrides, sizeof(MainRespOverride) *
-													   (nrespoverrides + 1));
-			respoverrides[nrespoverrides++] = override;
-		}
-		char* respout = cJSON_PrintUnformatted(response);
-		uint32_t rlen = strlen(respout);
-		send(fd, &rlen, 4, 0);
-		send(fd, respout, strlen(respout), 0);
-		free(respout);
-		cJSON_Delete(response);
-		cJSON_Delete(payld);
-	}
-	return NULL;
-}
 void InsertMainRespOverride(char* key, char* value) {
 	MainRespOverride override;
 	override.key = strdup(key);
@@ -106,96 +45,19 @@ void InsertMainRespOverride(char* key, char* value) {
 		realloc(respoverrides, sizeof(MainRespOverride) * (nrespoverrides + 1));
 	respoverrides[nrespoverrides++] = override;
 }
-void* UnixAccepter(void* args) {
-	int fd = (int)args;
-
-	while (1) {
-		struct pollfd pollfds[MAX_IPC_CLIENTS + 1];
-
-		pollfds[0].fd = fd;
-		pollfds[0].events = POLLIN;
-		pollfds[0].revents = 0;
-
-		for (int i = 0; i < MAX_IPC_CLIENTS; i++) {
-			pollfds[i + 1].fd = IPCSockets[i] > 0 ? IPCSockets[i] : -1;
-			pollfds[i + 1].events = POLLIN;
-			pollfds[i + 1].revents = 0;
-		}
-
-		int activity = poll(pollfds, MAX_IPC_CLIENTS + 1, -1);
-		if (activity < 0) {
-			if (errno == EINTR)
-				continue;
-			perror("poll");
-			break;
-		}
-
-		// new IPC client connecting
-		if (pollfds[0].revents & POLLIN) {
-			int new_socket = accept(fd, NULL, NULL);
-			if (new_socket >= 0) {
-				int placed = 0;
-				for (int i = 0; i < MAX_IPC_CLIENTS; i++) {
-					if (IPCSockets[i] <= 0) {
-						IPCSockets[i] = new_socket;
-						placed = 1;
-
-						pthread_t clientthread;
-						pthread_create(&clientthread, NULL, UnixListener,
-									   (void*)i);
-						pthread_detach(clientthread);
-						break;
-					}
-				}
-				if (!placed) {
-					close(new_socket);
-				}
-			}
-		}
-
-		for (int i = 0; i < MAX_IPC_CLIENTS; i++) {
-			if (IPCSockets[i] <= 0)
-				continue;
-
-			short revents = pollfds[i + 1].revents;
-			if (revents & (POLLHUP | POLLERR | POLLNVAL)) {
-				close(IPCSockets[i]);
-				IPCSockets[i] = 0;
-			}
-		}
-	}
-
-	return NULL;
-}
-
-
-#define MAX_EVENTS 64
-#define EV_PLAIN_LISTEN MAX_CLIENTS
-#define EV_TLS_LISTEN (MAX_CLIENTS + 1)
 
 int epfd = -1;
 
-static inline uint64_t EvKey(int fd, uint32_t idx) {
-	return ((uint64_t)(uint32_t)fd << 32) | idx;
-}
-
-int EpollAdd(int ep, int fd, uint64_t key, uint32_t events) {
-	struct epoll_event ev = {.events = events, .data.u64 = key};
-	return epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
-}
-
-void DisconnectClient(int i) {
-	Connection* c = &client_sockets[i];
+void DisconnectClient(Connection* c) {
 	int sd = c->fd;
 
 	YampUser* usr = FindUserByFD(sd);
 	if (usr) {
 		int cnt;
 		UserSession* ses = FindSessionByFD(sd);
-		if(!ses){
+		if (!ses) {
 			return;
 		}
-		hashmap_delete(UserSessionsByFD, ses);
 		if (ses->prev)
 			ses->prev->next = ses->next;
 		else
@@ -218,6 +80,7 @@ void DisconnectClient(int i) {
 			hashmap_delete(UsersByName, usr);
 			FreeUserObject(usr);
 		}
+		hashmap_delete(UserSessionsByFD, ses);
 	}
 
 	epoll_ctl(epfd, EPOLL_CTL_DEL, sd, NULL);
@@ -226,7 +89,10 @@ void DisconnectClient(int i) {
 		c->ssl = NULL;
 	}
 	close(sd);
-	c->connected = 0;
+	int i = c->idx;
+	free(c);
+	client_sockets[i] = client_sockets[--nClients];
+	client_sockets[i]->idx = i;
 }
 
 int main() {
@@ -297,7 +163,10 @@ int main() {
 	// incomings
 	SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
 	master_socket = socket(AF_INET, SOCK_STREAM, 0);
+	int one = 1;
+	setsockopt(master_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 	master_tls_socket = socket(AF_INET, SOCK_STREAM, 0);
+	setsockopt(master_tls_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 
 	bind(master_socket, (struct sockaddr*)&address, sizeof(address));
 	bind(master_tls_socket, (struct sockaddr*)&tlsaddress, sizeof(address));
@@ -315,21 +184,6 @@ int main() {
 
 	printf("server listening\n");
 
-	struct sockaddr_un unixaddress;
-	memset(&unixaddress, 0, sizeof(unixaddress));
-	unlink("/tmp/yamp-server.sock");
-	unixaddress.sun_family = AF_UNIX;
-	strncpy(unixaddress.sun_path, "/tmp/yamp-server.sock",
-			sizeof(unixaddress.sun_path) - 1);
-
-	int unix_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	bind(unix_fd, (struct sockaddr*)&unixaddress, sizeof(unixaddress));
-	listen(unix_fd, 3);
-	pthread_t unixacthread;
-	if (pthread_create(&unixacthread, NULL, UnixAccepter, (void*)unix_fd) ==
-		0) {
-		printf("unix IPC listening\n");
-	}
 	InitYAMPHTTP();
 
 	epfd = epoll_create1(0);
@@ -337,15 +191,44 @@ int main() {
 		perror("epoll_create1");
 		return -1;
 	}
-	EpollAdd(epfd, master_socket, EvKey(master_socket, EV_PLAIN_LISTEN),
-			 EPOLLIN);
-	EpollAdd(epfd, master_tls_socket, EvKey(master_tls_socket, EV_TLS_LISTEN),
-			 EPOLLIN);
+	struct epoll_event ev = {0};
 
-	struct epoll_event events[MAX_EVENTS];
+
+
+	ev.events = EPOLLIN;
+	Connection master_socket_con = {0};
+	master_socket_con.connected = 1;
+	master_socket_con.encrypt = 0;
+	master_socket_con.fd = master_socket;
+	master_socket_con.listener = 1;
+
+	ev.data.fd = master_socket;
+	ev.data.ptr = &master_socket_con; // Master listener socket
+
+
+	epoll_ctl(epfd, EPOLL_CTL_ADD, master_socket, &ev);
+
+	struct epoll_event ev_tls = {0};
+
+	ev_tls.events = EPOLLIN;
+
+	Connection master_tls_socket_con = {0};
+	master_tls_socket_con.connected = 1;
+	master_tls_socket_con.encrypt = 1;
+	master_tls_socket_con.fd = master_tls_socket;
+	master_tls_socket_con.listener = 1;
+
+	ev_tls.data.fd = master_tls_socket;
+	ev_tls.data.ptr = &master_tls_socket_con; // Master TLS listener socket
+
+	epoll_ctl(epfd, EPOLL_CTL_ADD, master_tls_socket, &ev_tls);
+
+	struct epoll_event events[64];
 
 	while (1) {
-		int n = epoll_wait(epfd, events, MAX_EVENTS, -1);
+		// process a chunk of 64 at a time, the while loop will eventually make
+		// it process them all
+		int n = epoll_wait(epfd, events, 64, -1);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
@@ -354,35 +237,44 @@ int main() {
 		}
 
 		for (int k = 0; k < n; k++) {
-			uint64_t key = events[k].data.u64;
-			uint32_t idx = (uint32_t)key;
-			int evfd = (int)(key >> 32);
-			uint32_t revents = events[k].events;
 
-			if (idx == EV_PLAIN_LISTEN) {
+			int fd = events[k].data.fd;
+			int type = events[k].data.u64;
+
+			Connection* c = events[k].data.ptr;
+
+			if (c->listener && !c->encrypt) {
 				int new_socket = accept(master_socket, NULL, NULL);
 				if (new_socket < 0)
 					continue;
 				YAMPSend(new_socket, "{\"type\":\"hello\"}", 16);
-				int placed = 0;
-				for (int i = 0; i < MAX_CLIENTS; i++) {
-					if (client_sockets[i].connected == 0) {
-						client_sockets[i].fd = new_socket;
-						client_sockets[i].ssl = NULL;
-						client_sockets[i].connected = 1;
-						client_sockets[i].encrypt = 0;
-						EpollAdd(epfd, new_socket, EvKey(new_socket, i),
-								 EPOLLIN);
-						placed = 1;
-						break;
-					}
-				}
-				if (!placed)
-					close(new_socket);
+
+				client_sockets = realloc(client_sockets,
+										 sizeof(Connection*) * (nClients + 1));
+				struct epoll_event ev = {0};
+
+				ev.events = EPOLLIN;
+				ev.data.fd = new_socket;
+				Connection* new_con = malloc(sizeof(*new_con));
+				*new_con = (Connection){0};
+				new_con->connected = 1;
+				new_con->encrypt = 0;
+				new_con->fd = new_socket;
+				new_con->listener = 0;
+				new_con->idx = nClients;
+
+
+				client_sockets[nClients] = new_con;
+				ev.data.ptr = client_sockets[nClients];
+
+
+				epoll_ctl(epfd, EPOLL_CTL_ADD, new_socket, &ev);
+
+				nClients++;
 				continue;
 			}
 
-			if (idx == EV_TLS_LISTEN) {
+			if (c->listener && c->encrypt) {
 				int new_socket = accept(master_tls_socket, NULL, NULL);
 				if (new_socket < 0)
 					continue;
@@ -394,34 +286,34 @@ int main() {
 					continue;
 				}
 				TLSYAMPSend(ssl, "{\"type\":\"hello\"}", 16);
-				int placed = 0;
-				for (int i = 0; i < MAX_CLIENTS; i++) {
-					if (client_sockets[i].connected == 0) {
-						client_sockets[i].fd = new_socket;
-						client_sockets[i].ssl = ssl;
-						client_sockets[i].connected = 1;
-						client_sockets[i].encrypt = 1;
-						EpollAdd(epfd, new_socket, EvKey(new_socket, i),
-								 EPOLLIN);
-						placed = 1;
-						break;
-					}
-				}
-				if (!placed) {
-					SSL_free(ssl);
-					close(new_socket);
-				}
+
+				client_sockets = realloc(client_sockets,
+										 sizeof(Connection*) * (nClients + 1));
+				struct epoll_event ev = {0};
+
+				ev.events = EPOLLIN;
+				ev.data.fd = new_socket;
+				Connection* new_con = malloc(sizeof(*new_con));
+				*new_con = (Connection){0};
+				new_con->connected = 1;
+				new_con->encrypt = 1;
+				new_con->fd = new_socket;
+				new_con->ssl = ssl;
+				new_con->listener = 0;
+				new_con->idx = nClients;
+
+
+				client_sockets[nClients] = new_con;
+				ev.data.ptr = client_sockets[nClients];
+
+
+				epoll_ctl(epfd, EPOLL_CTL_ADD, new_socket, &ev);
+
+				nClients++;
 				continue;
 			}
 
-			// client socket
-			if (idx >= MAX_CLIENTS)
-				continue;
-			Connection* c = &client_sockets[idx];
-			if (!c->connected || c->fd != evfd)
-				continue; // stale event
-
-			if (revents & EPOLLIN) {
+			if (events[k].events & EPOLLIN) {
 				uint32_t len;
 				char* payload;
 				int ok;
@@ -431,21 +323,23 @@ int main() {
 					ok = YAMPRecv(c->fd, &payload, &len);
 
 				if (ok) {
-					printf("%s\n", payload);
-					char* response;
-					if (ProcessRequest(payload, &response, idx, c)) {
+					// printf("%s\n", payload);
+					char* response = NULL;
+					// sockid in ProcessRequest is deprecated and unused
+					if (ProcessRequest(payload, &response, -1, c)) {
 						if (c->encrypt)
 							TLSYAMPSend(c->ssl, response, strlen(response));
 						else
 							YAMPSend(c->fd, response, strlen(response));
 					}
 					free(payload);
+					free(response);
 				} else {
 					// disconnected or tried to abuse the server
-					DisconnectClient(idx);
+					DisconnectClient(c);
 				}
-			} else if (revents & (EPOLLHUP | EPOLLERR)) {
-				DisconnectClient(idx);
+			} else if (events[k].events & (EPOLLHUP | EPOLLERR)) {
+				DisconnectClient(c);
 			}
 		}
 	}

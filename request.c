@@ -594,7 +594,8 @@ int ProcessRequest(char* payload, char** response, int sockid,
 			}
 			if (IsInGC(usr->id, gcid)) {
 				AddMemberToGC(userid, gcid);
-				PushNewConversation(userid, );
+				// TODO get the fucking gc and push it
+				// PushNewConversation(userid, );
 				InsertError(responsebuild, 0);
 			} else {
 				InsertError(responsebuild, 2);
