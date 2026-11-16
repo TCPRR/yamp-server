@@ -95,7 +95,52 @@ void DisconnectClient(Connection* c) {
 	client_sockets[i]->idx = i;
 }
 
+
+
+int dir_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+int ensure_dir(const char *path, mode_t mode) {
+    if (mkdir(path, mode) == 0) return 0;
+    if (errno == EEXIST && dir_exists(path)) return 0;
+    return -1;
+}
+
+int mkdir_p(const char *path, mode_t mode) {
+    char tmp[PATH_MAX];
+    size_t len = strlen(path);
+    if (len == 0 || len >= sizeof tmp) { errno = ENAMETOOLONG; return -1; }
+    memcpy(tmp, path, len + 1);
+
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = 0;
+        if (ensure_dir(tmp, mode) != 0) return -1;
+        *p = '/';
+    }
+    return ensure_dir(tmp, mode);
+}
+int file_exists(const char *path) {
+    int fd = open(path, O_WRONLY | O_EXCL, 0);
+    if (fd < 0) return 0;
+    close(fd);
+	return 1;
+}
+
 int main() {
+	if(!dir_exists(CONFIG_PATH)){
+		mkdir_p(CONFIG_PATH, 755);
+	}
+	if(!file_exists(CONFIG_PATH"/config.toml")){
+		RunSetupMode();
+	}
+	int load_ok = LoadConfig();
+	if(!load_ok){
+		fprintf(stderr, "Failed to load the configuration!\nAre you sure its properly formatted TOML and readable?\n");
+		return -1;
+	}
 	UsersByName = hashmap_new(sizeof(YampUser), 256, 0, 0, hmap_username_hash,
 							  hmap_username_compare, hmap_username_free, NULL);
 	UsersByID = hashmap_new(sizeof(YampUser), 256, 0, 0, hmap_userid_hash,
@@ -172,11 +217,11 @@ int main() {
 	bind(master_tls_socket, (struct sockaddr*)&tlsaddress, sizeof(address));
 	listen(master_socket, 3);
 	listen(master_tls_socket, 3);
-	if (SSL_CTX_use_certificate_chain_file(ctx, CHAINFILE_PATH) <= 0) {
+	if (SSL_CTX_use_certificate_chain_file(ctx, config.fullchain_path) <= 0) {
 		printf("Error loading the certificate chain\n");
 	}
 
-	if (SSL_CTX_use_PrivateKey_file(ctx, PRIVKEY_PATH, SSL_FILETYPE_PEM) <= 0) {
+	if (SSL_CTX_use_PrivateKey_file(ctx, config.privkey_path, SSL_FILETYPE_PEM) <= 0) {
 		printf("Error loading the private key chain\n");
 	}
 	SSL* serverssl = SSL_new(ctx);

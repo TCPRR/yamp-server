@@ -7,3 +7,4 @@ typedef struct UploadToken{
 } UploadToken;
 
 UploadToken* RegisterUploadToken();
+int RunSetupMode(void);

@@ -14,14 +14,13 @@
 #include <civetweb.h>
 #include "handlers.h"
 #include "override.h"
-#include "toml.h"
 #include "http.h"
 #include "pthread.h"
 #include <fcntl.h>
 #include "config.h"
 #include "globals.h"
+#include <semaphore.h>
 
-#define CDN_ROOT "/var/www/yamp-http"
 #define PROXY_MAX_BYTES (8u * 1024 * 1024)
 #define PROXY_TIMEOUT_S 10L
 
@@ -149,7 +148,7 @@ int CDN_Handler(struct mg_connection* conn, void* cbdata) {
 	}
 
 	char path[4096];
-	if (snprintf(path, sizeof path, "%s/%s", CDN_ROOT, rel) >=
+	if (snprintf(path, sizeof path, "%s/%s", config.cdn_root, rel) >=
 		(int)sizeof path) {
 		mg_send_http_error(conn, 414, "Path too long");
 		return 414;
@@ -331,8 +330,8 @@ int Upload_Handler(struct mg_connection* conn, void* cbdata) {
 
 	char filename[17];
 	GenerateID_Inline(filename);
-	char path[strlen(CDN_ROOT) + 1 + 16 + 1 + 8 + 1];
-	snprintf(path, sizeof path, "%s/%s%s", CDN_ROOT, filename, ext);
+	char path[strlen(config.cdn_root) + 1 + 16 + 1 + 8 + 1];
+	snprintf(path, sizeof path, "%s/%s%s", config.cdn_root, filename, ext);
 
 	int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
 	if (fd < 0) {
@@ -373,6 +372,192 @@ int Upload_Handler(struct mg_connection* conn, void* cbdata) {
 			  blen, body);
 	return 201;
 }
+int Frontpage_Handler(struct mg_connection* conn, void* cbdata){
+
+}
+
+static sem_t SetupDone;
+static char SetupToken[257];
+
+static const char SETUP_FORM[] =
+	"<!doctype html><title>yampd setup</title>"
+	"<h1>yampd first-time configuration setup</h1>"
+	"<form method=\"POST\" action=\"/setup\">"
+	"<input type=\"hidden\" name=\"token\" value=\"%s\">"
+	"Hostname: <input name=\"hostname\" value=\"\"><br>"
+	"YAMP-HTTP Base URL: <input name=\"http_base_url\" value=\"https://\"><br>"
+	"YAMP-HTTP CDN root: <input name=\"cdn_root\" value=\"/var/www/yamp-http\"><br>"
+	"Max upload (MB): <input name=\"maxupload_mb\" value=\"512\"><br>"
+	"Max GC member count: <input name=\"gc_member\" value=\"15\"><br>"
+	"TLS full chain path: <input name=\"full_chain\" value=\"\"><br>"
+	"TLS private key path: <input name=\"priv_key\" value=\"\"><br>"
+	"<input type=\"submit\" value=\"Save\"></form>";
+
+int Setup_Page(struct mg_connection* conn, void* cbdata) {
+	const struct mg_request_info* ri = mg_get_request_info(conn);
+	char tok[257] = {0};
+	if (!ri->query_string ||
+		mg_get_var(ri->query_string, strlen(ri->query_string), "token",
+				   tok, sizeof tok) < 0 ||
+		strcmp(tok, SetupToken) != 0) {
+		mg_send_http_error(conn, 403, "Use the URL printed in the server console");
+		return 403;
+	}
+	char body[2048];
+	snprintf(body, sizeof body, SETUP_FORM, SetupToken);
+	respond(conn, 200, "text/html; charset=utf-8", body);
+	return 200;
+}
+
+static int GetField(const char* body, int n, const char* name, char* out,
+					size_t outsz) {
+	int r = mg_get_var(body, n, name, out, outsz);
+	if (r == -1) { out[0] = 0; return -1; }
+	if (r < 0)   { out[0] = 0; return -2; }
+	return 0;
+}
+
+static int SafeStr(const char* s) {
+	for (const unsigned char* c = (const unsigned char*)s; *c; c++)
+		if (*c == '"' || *c == '\\' || *c < 0x20 || *c == 0x7f)
+			return 0;
+	return 1;
+}
+
+static int ValidHostname(const char* s) {
+	size_t len = strlen(s);
+	if (len == 0 || len > 253)
+		return 0;
+	for (; *s; s++) {
+		char c = *s;
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			  (c >= '0' && c <= '9') || c == '-' || c == '.'))
+			return 0;
+	}
+	return 1;
+}
+
+static int ValidAbsPath(const char* s) {
+	return s[0] == '/' && s[1] && SafeStr(s);
+}
+
+int Setup_Submit(struct mg_connection* conn, void* cbdata) {
+	const struct mg_request_info* ri = mg_get_request_info(conn);
+	if (strcmp(ri->request_method, "POST") != 0) {
+		mg_send_http_error(conn, 405, "Method not allowed");
+		return 405;
+	}
+
+	char body[4096];
+	int n = 0, r;
+	while (n < (int)sizeof body - 1 &&
+		   (r = mg_read(conn, body + n, sizeof body - 1 - n)) > 0)
+		n += r;
+	if (n <= 0) { mg_send_http_error(conn, 400, "Empty body"); return 400; }
+	body[n] = 0;
+
+	char tok[257] = {0}, hostname[256] = {0}, url[256] = {0};
+	char cdn_root[1024] = {0}, mb[16] = {0}, gcm[16] = {0};
+	char full_chain[1024] = {0}, priv_key[1024] = {0};
+	char *end;
+	struct stat st;
+
+	GetField(body, n, "token", tok, sizeof tok);
+	if (strcmp(tok, SetupToken) != 0) {
+		mg_send_http_error(conn, 403, "Bad token");
+		return 403;
+	}
+
+	if (GetField(body, n, "hostname", hostname, sizeof hostname) ||
+		GetField(body, n, "http_base_url", url, sizeof url) ||
+		GetField(body, n, "cdn_root", cdn_root, sizeof cdn_root) ||
+		GetField(body, n, "maxupload_mb", mb, sizeof mb) ||
+		GetField(body, n, "gc_member", gcm, sizeof gcm) ||
+		GetField(body, n, "full_chain", full_chain, sizeof full_chain) ||
+		GetField(body, n, "priv_key", priv_key, sizeof priv_key))
+		goto bad;
+
+	if (!ValidHostname(hostname))
+		goto bad;
+
+	if (strncmp(url, "http://", 7) && strncmp(url, "https://", 8))
+		goto bad;
+	for (const char* c = url; *c; c++)
+		if (*c == '"' || *c == '\\' || *c < 0x21)
+			goto bad;
+
+	if (!ValidAbsPath(cdn_root) || strstr(cdn_root, ".."))
+		goto bad;
+	if (stat(cdn_root, &st) < 0 || !S_ISDIR(st.st_mode))
+		goto bad;
+
+	long long m = strtoll(mb, &end, 10);
+	if (!*mb || *end || m < 1 || m > 100000)
+		goto bad;
+
+	long gc = strtol(gcm, &end, 10);
+	if (!*gcm || *end || gc < 2 || gc > 100000)
+		goto bad;
+
+	int have_tls = full_chain[0] || priv_key[0];
+	if (have_tls) {
+		if (!ValidAbsPath(full_chain) || !ValidAbsPath(priv_key))
+			goto bad;
+		if (access(full_chain, R_OK) < 0 || access(priv_key, R_OK) < 0)
+			goto bad;
+	}
+
+	// write atomically so dying in between cannot cause a faulty config that can crash the server
+	// so smart ikr?
+	char* tmp = CONFIG_PATH"/config.tmp";
+	FILE* f = fopen(tmp, "w");
+	if (!f) { mg_send_http_error(conn, 500, "Can't write config"); return 500; }
+	fprintf(f,
+			"hostname = \"%s\"\n"
+			"http_base_url = \"%s\"\n"
+			"cdn_root = \"%s\"\n"
+			"maxupload = %lld\n"
+			"gc_member_limit = %ld\n",
+			hostname, url, cdn_root, m * 1024 * 1024, gc);
+	if (have_tls)
+		fprintf(f, "fullchain_path = \"%s\"\nprivkey_path = \"%s\"\n",
+				full_chain, priv_key);
+	if (fclose(f) != 0 || rename(tmp, CONFIG_PATH"/config.toml") != 0) {
+		unlink(tmp);
+		mg_send_http_error(conn, 500, "Can't write config");
+		return 500;
+	}
+
+	respond(conn, 200, "text/html; charset=utf-8",
+			"<h1>Saved!</h1>The server is now starting normally! Enjoy yamp!");
+	sem_post(&SetupDone);
+	return 200;
+
+bad:
+	mg_send_http_error(conn, 400, "Invalid input");
+	return 400;
+}
+
+int RunSetupMode(void) {
+	GenerateToken_Inline(SetupToken);
+	sem_init(&SetupDone, 0, 0);
+
+	const char* options[] = {"listening_ports", "127.0.0.1:5226", NULL};
+	struct mg_callbacks cb;
+	memset(&cb, 0, sizeof cb);
+	struct mg_context* ctx = mg_start(&cb, NULL, options);
+	if (!ctx) return -1;
+
+	mg_set_request_handler(ctx, "/setup", Setup_Submit, NULL);
+	mg_set_request_handler(ctx, "/", Setup_Page, NULL);
+
+	fprintf(stderr, "First-time setup: http://127.0.0.1:5226/?token=%s\n", SetupToken);
+
+	sem_wait(&SetupDone);
+	sleep(1);
+	mg_stop(ctx);
+	return 0;
+}
 int InitYAMPHTTP(void) {
 	config.http_base_url = "https://yamp.root.sx";
 	config.maxupload = 512 * 1024 * 1024ull;
@@ -388,6 +573,7 @@ int InitYAMPHTTP(void) {
 	mg_set_request_handler(ctx, "/cdn/content/", CDN_Handler, "/cdn/content/");
 	mg_set_request_handler(ctx, "/cdn/upload/", Upload_Handler, "/cdn/upload/");
 	mg_set_request_handler(ctx, "/cdn/proxy", Proxy_Handler, NULL);
+	mg_set_request_handler(ctx, "/", Frontpage_Handler, NULL);
 
 	signal(SIGPIPE, SIG_IGN);
 	curl_global_init(CURL_GLOBAL_DEFAULT);
